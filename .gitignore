@@ -1,0 +1,30 @@
+# OS / editor
+.DS_Store
+*.swp
+.history
+.idea/
+*.iml
+
+# Dart / Flutter
+.dart_tool/
+.build/
+.buildlog/
+.swiftpm/
+migrate_working_dir/
+build/
+/pubspec.lock
+**/doc/api/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.class
+*.log
+
+# Native binaries: fetched from the pinned core release, or dropped in for local dev
+android/src/main/jniLibs/
+windows/libs/
+linux/libs/
+windows/include/wintun.h
+
+# Local dev files
+/CLAUDE.md
+.claude/

@@ -1,0 +1,116 @@
+group = "com.glitch_vpn.core"
+version = "1.0-SNAPSHOT"
+
+buildscript {
+    ext.kotlin_version = "2.1.0"
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.7.3")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+// .so source: LIBGLITCHCORE_LOCAL → committed jniLibs → pinned release download.
+ext.pubspecValue = { String key ->
+    def line = file("${projectDir}/../pubspec.yaml").readLines().find { it.trim().startsWith("${key}:") }
+    line == null ? "" : line.split(":", 2)[1].trim()
+}
+ext.coreVersion = pubspecValue("libglitchcore_version")
+if (!coreVersion) throw new GradleException("libglitchcore_version missing in pubspec.yaml")
+ext.coreSha = pubspecValue("libglitchcore_sha256")
+ext.localFfi = System.getenv("LIBGLITCHCORE_LOCAL")
+ext.committedSo = file("${projectDir}/src/main/jniLibs/arm64-v8a/libglitchcore.so")
+ext.downloadedJni = file("${buildDir}/libglitchcore/${coreVersion}/jniLibs")
+
+android {
+    namespace = "com.glitch_vpn.core"
+
+    ndkVersion = "26.3.11579264"
+
+    compileSdk = 35
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_11
+    }
+
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+        test.java.srcDirs += "src/test/kotlin"
+        if (localFfi) {
+            main.jniLibs.srcDirs += file("${localFfi}/android")
+        } else if (!committedSo.exists()) {
+            main.jniLibs.srcDirs += downloadedJni
+        }
+    }
+
+    defaultConfig {
+        minSdk = 21
+    }
+
+    dependencies {
+        testImplementation("org.jetbrains.kotlin:kotlin-test")
+        testImplementation("org.mockito:mockito-core:5.0.0")
+    }
+
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+
+            testLogging {
+               events "passed", "skipped", "failed", "standardOut", "standardError"
+               outputs.upToDateWhen {false}
+               showStandardStreams = true
+            }
+        }
+    }
+}
+
+tasks.register("fetchLibglitchcore") {
+    outputs.dir(downloadedJni)
+    onlyIf { !localFfi && !committedSo.exists() }
+    doLast {
+        if (file("${downloadedJni}/arm64-v8a/libglitchcore.so").exists()) return
+        def zip = file("${buildDir}/libglitchcore/${coreVersion}.zip")
+        zip.parentFile.mkdirs()
+        if (!zip.exists()) {
+            def url = "https://github.com/glitch-vpn/libglitchcore/releases/download/${coreVersion}/libglitchcore-${coreVersion}.zip"
+            logger.lifecycle("fetchLibglitchcore: downloading ${url}")
+            ant.get(src: url, dest: zip)
+        }
+        if (coreSha) {
+            def actual = java.security.MessageDigest.getInstance("SHA-256").digest(zip.bytes).encodeHex().toString()
+            if (!actual.equalsIgnoreCase(coreSha)) {
+                throw new GradleException("libglitchcore ${coreVersion} sha256 mismatch: got ${actual}, expected ${coreSha}")
+            }
+        }
+        copy {
+            from(zipTree(zip)) { include "ffi/android/**" }
+            eachFile { it.path = it.path.replaceFirst("ffi/android/", "") }
+            includeEmptyDirs = false
+            into downloadedJni
+        }
+    }
+}
+
+tasks.whenTaskAdded { t ->
+    if (t.name ==~ /merge.*JniLibFolders/) t.dependsOn("fetchLibglitchcore")
+}

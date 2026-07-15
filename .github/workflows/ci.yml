@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Plugin
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Example
+        run: |
+          cd example
+          flutter pub get
+          flutter analyze
+
+  bindings:
+    name: ffigen bindings match pinned header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install libclang (ffigen)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+      - name: Fetch pinned core header
+        run: |
+          ver=$(grep '^libglitchcore_version:' pubspec.yaml | awk '{print $2}')
+          test -n "$ver"
+          curl -fL -o core.zip "https://github.com/glitch-vpn/libglitchcore/releases/download/$ver/libglitchcore-$ver.zip"
+          mkdir -p build
+          unzip -o -j core.zip 'ffi/libglitchcore.h' -d build
+
+      - name: Stage Dart SDK headers (ffigen)
+        run: |
+          inc="$FLUTTER_ROOT/bin/cache/dart-sdk/include"
+          cp "$inc/dart_api_dl.h" "$inc/dart_api.h" "$inc/dart_native_api.h" build/
+
+      - name: Regenerate and diff
+        run: |
+          flutter pub get
+          dart run ffigen --config ffigen.yaml
+          git diff --exit-code lib/src/bindings_generated.dart \
+            || { echo "::error::bindings_generated.dart is stale for the pinned core header; run 'dart run ffigen' and commit"; exit 1; }

@@ -1,0 +1,29 @@
+name: GlitchCoreBindings
+description: Auto bindings for libglitchcore
+output: lib/src/bindings_generated.dart
+headers:
+  entry-points:
+    - build/libglitchcore.h
+  include-directives:
+    - '**libglitchcore.h'
+functions:
+  exclude:
+    - glitchEngineTraffic
+    - 'Java_.*'
+    - '_GoString.*'
+typedefs:
+  exclude:
+    - 'Go.*'
+    - ptrdiff_t
+    - '_Fcomplex'
+    - '_Dcomplex'
+structs:
+  exclude:
+    - 'Go.*'
+    - '_GoString_'
+    - '_C_.*'
+globals:
+  exclude:
+    - '.*'
+compiler-opts:
+  - -DLINUX 
