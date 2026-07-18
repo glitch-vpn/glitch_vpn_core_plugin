@@ -54,6 +54,8 @@ target_link_libraries(${PLUGIN_NAME}
   Advapi32
   gdiplus
   Ole32
+  windowsapp
+  iphlpapi
 )
 
 # DLL source: LIBGLITCHCORE_LOCAL → committed libs/ → pinned release (pubspec.yaml).
@@ -138,7 +140,7 @@ target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 # The test binary compiles the plugin sources directly, so it needs the same
 # native libs (icon extraction uses GDI+ / COM streams; shell APIs for enum).
-target_link_libraries(${TEST_RUNNER} PRIVATE shell32 Advapi32 gdiplus Ole32)
+target_link_libraries(${TEST_RUNNER} PRIVATE shell32 Advapi32 gdiplus Ole32 windowsapp iphlpapi)
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different

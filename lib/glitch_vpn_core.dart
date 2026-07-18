@@ -1502,6 +1502,120 @@ class GlitchVpnCore {
     } catch (_) {}
     return const {};
   }
+
+  // === Windows Mobile Hotspot (shares the VPN tunnel with Wi-Fi clients) ===
+
+  /// Default hotspot network name.
+  static const String defaultHotspotSsid = 'GlitchVPN Wifi';
+
+  HotspotCredentials? _hotspotCredentials;
+
+  /// Credentials from the last successful [startHotspot], or null.
+  HotspotCredentials? get hotspotCredentials => _hotspotCredentials;
+
+  /// Native hotspot errors arrive as {errorCode, errorMessage} maps.
+  static void _throwIfHotspotError(Map<dynamic, dynamic> map) {
+    final code = map['errorCode']?.toString();
+    if (code != null && code.isNotEmpty) {
+      throw PlatformException(
+        code: code,
+        message: map['errorMessage']?.toString(),
+      );
+    }
+  }
+
+  /// Starts the Windows Mobile Hotspot sharing the VPN tunnel connection.
+  ///
+  /// [ssid] defaults to [defaultHotspotSsid]. [password] is random when
+  /// omitted. The effective credentials are returned and stay readable via
+  /// [hotspotCredentials] / [getHotspotCredentials].
+  ///
+  /// [open] requests a passwordless network. Windows does not support open
+  /// hotspots, so on Windows this throws `HOTSPOT_OPEN_NOT_SUPPORTED`.
+  ///
+  /// [HotspotCredentials.tunneled] is true when the hotspot shares the VPN
+  /// adapter itself (client traffic is guaranteed to egress through the
+  /// tunnel) - connect the VPN before starting the hotspot for that.
+  ///
+  /// Throws [PlatformException] when the hotspot cannot be started:
+  /// `HOTSPOT_NOT_SUPPORTED` (no SoftAP-capable Wi-Fi adapter, disabled by
+  /// policy/edition, ...), `HOTSPOT_NO_CONNECTION` (nothing to share),
+  /// `HOTSPOT_OPEN_NOT_SUPPORTED`, `HOTSPOT_START_FAILED`.
+  Future<HotspotCredentials> startHotspot({
+    String? ssid,
+    String? password,
+    bool open = false,
+  }) async {
+    final name = (ssid == null || ssid.trim().isEmpty)
+        ? defaultHotspotSsid
+        : ssid.trim();
+    if (utf8.encode(name).length > 32) {
+      throw ArgumentError.value(ssid, 'ssid', 'must be at most 32 bytes');
+    }
+    var pass = '';
+    if (open) {
+      if (password != null && password.isNotEmpty) {
+        throw ArgumentError('password must not be set when open is true');
+      }
+    } else {
+      pass = (password == null || password.isEmpty)
+          ? _randomCred(12)
+          : password;
+      if (pass.length < 8 || pass.length > 63) {
+        throw ArgumentError.value(
+          password,
+          'password',
+          'WPA2 passphrase must be 8-63 characters',
+        );
+      }
+    }
+    if (!Platform.isWindows) {
+      throw UnsupportedError('Hotspot is only supported on Windows');
+    }
+    final res = await _ch.invokeMethod('startHotspot', {
+      'ssid': name,
+      'password': pass,
+      'open': open,
+    });
+    final map = (res as Map<dynamic, dynamic>? ?? const {});
+    _throwIfHotspotError(map);
+    final creds = HotspotCredentials.fromMap(map);
+    _hotspotCredentials = creds;
+    return creds;
+  }
+
+  /// Stops the Mobile Hotspot. No-op when it isn't running.
+  ///
+  /// Throws [PlatformException] `HOTSPOT_STOP_FAILED` on failure.
+  Future<void> stopHotspot() async {
+    if (!Platform.isWindows) {
+      throw UnsupportedError('Hotspot is only supported on Windows');
+    }
+    final res = await _ch.invokeMethod('stopHotspot');
+    if (res is Map) _throwIfHotspotError(res);
+    _hotspotCredentials = null;
+  }
+
+  /// Hotspot name/password as currently configured in Windows, or null when
+  /// the hotspot is not active.
+  Future<HotspotCredentials?> getHotspotCredentials() async {
+    if (!Platform.isWindows) return null;
+    final res = await _ch.invokeMethod('getHotspotConfig');
+    final map = (res as Map<dynamic, dynamic>? ?? const {});
+    _throwIfHotspotError(map);
+    if (map['active'] != true) return null;
+    return HotspotCredentials.fromMap(map);
+  }
+
+  /// Whether this machine can run a Mobile Hotspot at all.
+  Future<bool> isHotspotSupported() async {
+    if (!Platform.isWindows) return false;
+    try {
+      return await _ch.invokeMethod<bool>('isHotspotSupported') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 class InstalledApp {
@@ -1513,6 +1627,35 @@ class InstalledApp {
     required this.path,
     required this.process,
   });
+}
+
+/// Wi-Fi hotspot credentials handed to the consumer.
+class HotspotCredentials {
+  final String ssid;
+
+  /// Null only for an open (passwordless) network.
+  final String? password;
+
+  /// True when the hotspot shares the VPN tunnel adapter itself, so client
+  /// traffic is guaranteed to egress through the tunnel.
+  final bool tunneled;
+
+  const HotspotCredentials({
+    required this.ssid,
+    this.password,
+    this.tunneled = false,
+  });
+
+  bool get isOpen => password == null;
+
+  factory HotspotCredentials.fromMap(Map<dynamic, dynamic> map) {
+    final pass = map['password']?.toString() ?? '';
+    return HotspotCredentials(
+      ssid: map['ssid']?.toString() ?? '',
+      password: pass.isEmpty ? null : pass,
+      tunneled: map['tunneled'] == true,
+    );
+  }
 }
 
 /// Headless disconnect when the UI isn't running.

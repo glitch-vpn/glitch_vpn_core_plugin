@@ -53,6 +53,9 @@ The app under `example/` covers the whole API and doubles as a test client.
 * Several links in one config make a balancer, awg included.
 * Split tunneling: per-app on Android, per-process on desktop, with
   installed-app pickers (`listInstalledApps`, `appIcons`, `pickExecutable`).
+* Windows Wi-Fi hotspot over the tunnel: `startHotspot()` brings up the
+  Mobile Hotspot sharing the VPN adapter, so client traffic goes through the
+  VPN. See "Windows: Wi-Fi hotspot".
 * Android runs a foreground service with a live notification and can
   disconnect headlessly. Windows handles UAC elevation or talks to the system
   service. `availableEngines` reports what the loaded binary supports.
@@ -74,6 +77,34 @@ through it with no UAC prompt. Without the service, `ensureAdmin()` relaunches
 the process elevated. Installing the service is the app installer's job - the
 plugin never touches the system. Debug builds run the core in-process and
 always take the UAC route. Proxy mode (`proxyPort`) needs neither.
+
+## Windows: Wi-Fi hotspot
+
+`startHotspot()` starts the Windows Mobile Hotspot and shares the VPN tunnel
+adapter's connection, so hotspot clients' traffic egresses through the VPN:
+
+```dart
+final creds = await GlitchVpnCore.instance.startHotspot(); // after connect()
+print('${creds.ssid} / ${creds.password}');                // 'GlitchVPN Wifi' / random
+await GlitchVpnCore.instance.stopHotspot();
+```
+
+* SSID defaults to `GlitchVpnCore.defaultHotspotSsid` (`GlitchVPN Wifi`);
+  pass `ssid:` to override. The password is random unless `password:` is
+  given; the effective credentials come back from `startHotspot` and stay
+  readable via `hotspotCredentials` (last started) or
+  `getHotspotCredentials()` (live Windows config).
+* Connect the VPN first: with the tunnel up the hotspot shares the VPN
+  adapter and `HotspotCredentials.tunneled` is `true`. Without it the hotspot
+  falls back to the plain internet connection (`tunneled: false`).
+* `open: true` (passwordless) is accepted by the API but Windows Mobile
+  Hotspot requires a WPA2 passphrase, so it fails with
+  `HOTSPOT_OPEN_NOT_SUPPORTED`.
+* When the machine cannot host a hotspot (no SoftAP-capable Wi-Fi adapter,
+  disabled by policy or Windows edition), `startHotspot` throws a
+  `PlatformException`: `HOTSPOT_NOT_SUPPORTED`, `HOTSPOT_NO_CONNECTION`,
+  `HOTSPOT_START_FAILED` or `HOTSPOT_STOP_FAILED`; `isHotspotSupported()`
+  checks upfront. No admin rights are required.
 
 ## Native binaries
 

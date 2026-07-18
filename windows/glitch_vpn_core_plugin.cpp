@@ -9,6 +9,14 @@
 #include <objidl.h>
 #include <gdiplus.h>
 
+#include <iphlpapi.h>
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Networking.Connectivity.h>
+#include <winrt/Windows.Networking.NetworkOperators.h>
+
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 #include <flutter/standard_method_codec.h>
@@ -369,6 +377,298 @@ static void CollectShortcuts(
   FindClose(h);
 }
 
+// === Windows Mobile Hotspot ===
+// Shares a connection over the built-in Mobile Hotspot (SoftAP + DHCP + NAT).
+// The tethering manager is created from the VPN tunnel adapter's connection
+// profile when the tunnel is up, so client traffic egresses through the VPN.
+
+namespace winnet = winrt::Windows::Networking::Connectivity;
+namespace winop = winrt::Windows::Networking::NetworkOperators;
+
+// The WinTun adapter created by libglitchcore (friendly name may get a
+// numeric suffix, hence prefix match).
+static constexpr wchar_t kVpnAdapterPrefix[] = L"GlitchVPN";
+
+// C++/WinRT .get() must not block an STA thread; hotspot workers use MTA.
+struct MtaScope {
+  HRESULT hr;
+  MtaScope() { hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED); }
+  ~MtaScope() { if (SUCCEEDED(hr)) CoUninitialize(); }
+};
+
+// Errors travel to Dart as {errorCode, errorMessage} because RunAsync only
+// delivers Success results; the Dart side rethrows them as PlatformException.
+static flutter::EncodableValue HotspotError(const std::string& code,
+                                            const std::string& message) {
+  flutter::EncodableMap m;
+  m[flutter::EncodableValue("errorCode")] = flutter::EncodableValue(code);
+  m[flutter::EncodableValue("errorMessage")] = flutter::EncodableValue(message);
+  return flutter::EncodableValue(m);
+}
+
+// Interface GUID of the WinTun adapter ("GlitchVPN*"), if present.
+static std::optional<GUID> FindVpnAdapterId() {
+  ULONG size = 16 * 1024;
+  std::vector<BYTE> buf(size);
+  const ULONG flags = GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
+                      GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+  auto* addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+  ULONG rc = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, addrs, &size);
+  if (rc == ERROR_BUFFER_OVERFLOW) {
+    buf.resize(size);
+    addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+    rc = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, addrs, &size);
+  }
+  if (rc != NO_ERROR) return std::nullopt;
+  for (auto* a = addrs; a != nullptr; a = a->Next) {
+    if (a->FriendlyName == nullptr) continue;
+    if (wcsncmp(a->FriendlyName, kVpnAdapterPrefix,
+                wcslen(kVpnAdapterPrefix)) != 0) {
+      continue;
+    }
+    // AdapterName is the interface GUID string, e.g. "{9A2B...}".
+    const int wlen =
+        MultiByteToWideChar(CP_ACP, 0, a->AdapterName, -1, nullptr, 0);
+    std::wstring wname(wlen, 0);
+    MultiByteToWideChar(CP_ACP, 0, a->AdapterName, -1, wname.data(), wlen);
+    GUID id;
+    if (SUCCEEDED(CLSIDFromString(wname.c_str(), &id))) return id;
+  }
+  return std::nullopt;
+}
+
+// Picks the connection profile to share: the VPN tunnel's profile when the
+// tunnel is up, else the internet profile. |tunneled| reports whether the
+// chosen profile belongs to the VPN adapter.
+static winnet::ConnectionProfile PickShareProfile(bool& tunneled) {
+  tunneled = false;
+  const std::optional<GUID> vpn_id = FindVpnAdapterId();
+  if (vpn_id) {
+    const winrt::guid vpn_guid(*vpn_id);
+    for (const auto& profile :
+         winnet::NetworkInformation::GetConnectionProfiles()) {
+      try {
+        const auto adapter = profile.NetworkAdapter();
+        if (adapter && adapter.NetworkAdapterId() == vpn_guid) {
+          tunneled = true;
+          return profile;
+        }
+      } catch (const winrt::hresult_error&) {
+        // Some profiles expose no adapter; skip them.
+      }
+    }
+  }
+  auto internet = winnet::NetworkInformation::GetInternetConnectionProfile();
+  if (internet && vpn_id) {
+    try {
+      const auto adapter = internet.NetworkAdapter();
+      tunneled = adapter && adapter.NetworkAdapterId() == winrt::guid(*vpn_id);
+    } catch (const winrt::hresult_error&) {
+    }
+  }
+  return internet;
+}
+
+static std::string TetheringCapabilityMessage(winop::TetheringCapability c) {
+  using winop::TetheringCapability;
+  switch (c) {
+    case TetheringCapability::DisabledByGroupPolicy:
+      return "Hotspot is disabled by group policy.";
+    case TetheringCapability::DisabledByHardwareLimitation:
+      return "No Wi-Fi adapter with hotspot (SoftAP) support is available.";
+    case TetheringCapability::DisabledByOperator:
+      return "Hotspot is disabled by the network operator.";
+    case TetheringCapability::DisabledBySku:
+      return "Hotspot is disabled in this edition of Windows.";
+    case TetheringCapability::DisabledByRequiredAppNotInstalled:
+      return "A required system app for hotspot is not installed.";
+    case TetheringCapability::DisabledOnSimError:
+      return "Hotspot is disabled due to a SIM error.";
+    default:
+      return "Hotspot is not available on this system (capability code " +
+             std::to_string(static_cast<int>(c)) + ").";
+  }
+}
+
+static std::string TetheringStatusMessage(winop::TetheringOperationStatus s,
+                                          const winrt::hstring& extra) {
+  using winop::TetheringOperationStatus;
+  std::string msg;
+  switch (s) {
+    case TetheringOperationStatus::WiFiDeviceOff:
+      msg = "Wi-Fi is turned off.";
+      break;
+    case TetheringOperationStatus::MobileBroadbandDeviceOff:
+      msg = "The mobile broadband device is turned off.";
+      break;
+    case TetheringOperationStatus::BluetoothDeviceOff:
+      msg = "Bluetooth is turned off.";
+      break;
+    case TetheringOperationStatus::OperationInProgress:
+      msg = "Another hotspot operation is in progress.";
+      break;
+    case TetheringOperationStatus::EntitlementCheckTimeout:
+    case TetheringOperationStatus::EntitlementCheckFailure:
+      msg = "The operator entitlement check failed.";
+      break;
+    default:
+      msg = "Tethering operation failed (status code " +
+            std::to_string(static_cast<int>(s)) + ").";
+      break;
+  }
+  if (!extra.empty()) msg += " " + winrt::to_string(extra);
+  return msg;
+}
+
+static flutter::EncodableValue StartHotspotWork(const std::string& ssid,
+                                                const std::string& password,
+                                                bool open) {
+  if (open) {
+    return HotspotError(
+        "HOTSPOT_OPEN_NOT_SUPPORTED",
+        "Windows Mobile Hotspot requires a WPA2 passphrase; open "
+        "(passwordless) hotspots are not supported by the OS.");
+  }
+  MtaScope com;
+  try {
+    bool tunneled = false;
+    auto profile = PickShareProfile(tunneled);
+    if (!profile) {
+      return HotspotError("HOTSPOT_NO_CONNECTION",
+                          "No shareable network connection was found.");
+    }
+    const auto capability = winop::NetworkOperatorTetheringManager::
+        GetTetheringCapabilityFromConnectionProfile(profile);
+    if (capability != winop::TetheringCapability::Enabled) {
+      return HotspotError("HOTSPOT_NOT_SUPPORTED",
+                          TetheringCapabilityMessage(capability));
+    }
+
+    winop::NetworkOperatorTetheringManager manager{nullptr};
+    try {
+      manager = winop::NetworkOperatorTetheringManager::
+          CreateFromConnectionProfile(profile);
+    } catch (const winrt::hresult_error&) {
+      if (!tunneled) throw;
+      // The tunnel profile cannot be shared directly; fall back to the
+      // internet profile (post-NAT traffic still follows the host routing
+      // table into the tunnel while the VPN is up).
+      auto internet =
+          winnet::NetworkInformation::GetInternetConnectionProfile();
+      if (!internet) throw;
+      manager = winop::NetworkOperatorTetheringManager::
+          CreateFromConnectionProfile(internet);
+      tunneled = false;
+    }
+
+    auto config = manager.GetCurrentAccessPointConfiguration();
+    config.Ssid(winrt::to_hstring(ssid));
+    config.Passphrase(winrt::to_hstring(password));
+    manager.ConfigureAccessPointAsync(config).get();
+
+    if (manager.TetheringOperationalState() !=
+        winop::TetheringOperationalState::On) {
+      const auto res = manager.StartTetheringAsync().get();
+      if (res.Status() != winop::TetheringOperationStatus::Success) {
+        return HotspotError(
+            "HOTSPOT_START_FAILED",
+            TetheringStatusMessage(res.Status(), res.AdditionalErrorMessage()));
+      }
+    }
+
+    flutter::EncodableMap out;
+    out[flutter::EncodableValue("ssid")] =
+        flutter::EncodableValue(winrt::to_string(config.Ssid()));
+    out[flutter::EncodableValue("password")] =
+        flutter::EncodableValue(winrt::to_string(config.Passphrase()));
+    out[flutter::EncodableValue("open")] = flutter::EncodableValue(false);
+    out[flutter::EncodableValue("tunneled")] =
+        flutter::EncodableValue(tunneled);
+    return flutter::EncodableValue(out);
+  } catch (const winrt::hresult_error& e) {
+    return HotspotError("HOTSPOT_START_FAILED", winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    return HotspotError("HOTSPOT_START_FAILED", e.what());
+  }
+}
+
+static flutter::EncodableValue StopHotspotWork() {
+  MtaScope com;
+  try {
+    bool tunneled = false;
+    auto profile = PickShareProfile(tunneled);
+    if (!profile) {
+      // Nothing shareable means nothing can be running.
+      return flutter::EncodableValue(true);
+    }
+    winop::NetworkOperatorTetheringManager manager{nullptr};
+    try {
+      manager = winop::NetworkOperatorTetheringManager::
+          CreateFromConnectionProfile(profile);
+    } catch (const winrt::hresult_error&) {
+      return flutter::EncodableValue(true);
+    }
+    if (manager.TetheringOperationalState() ==
+        winop::TetheringOperationalState::Off) {
+      return flutter::EncodableValue(true);
+    }
+    const auto res = manager.StopTetheringAsync().get();
+    if (res.Status() != winop::TetheringOperationStatus::Success) {
+      return HotspotError(
+          "HOTSPOT_STOP_FAILED",
+          TetheringStatusMessage(res.Status(), res.AdditionalErrorMessage()));
+    }
+    return flutter::EncodableValue(true);
+  } catch (const winrt::hresult_error& e) {
+    return HotspotError("HOTSPOT_STOP_FAILED", winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    return HotspotError("HOTSPOT_STOP_FAILED", e.what());
+  }
+}
+
+static flutter::EncodableValue GetHotspotConfigWork() {
+  MtaScope com;
+  flutter::EncodableMap out;
+  out[flutter::EncodableValue("active")] = flutter::EncodableValue(false);
+  try {
+    bool tunneled = false;
+    auto profile = PickShareProfile(tunneled);
+    if (!profile) return flutter::EncodableValue(out);
+    auto manager = winop::NetworkOperatorTetheringManager::
+        CreateFromConnectionProfile(profile);
+    auto config = manager.GetCurrentAccessPointConfiguration();
+    out[flutter::EncodableValue("active")] = flutter::EncodableValue(
+        manager.TetheringOperationalState() ==
+        winop::TetheringOperationalState::On);
+    out[flutter::EncodableValue("ssid")] =
+        flutter::EncodableValue(winrt::to_string(config.Ssid()));
+    out[flutter::EncodableValue("password")] =
+        flutter::EncodableValue(winrt::to_string(config.Passphrase()));
+    out[flutter::EncodableValue("tunneled")] =
+        flutter::EncodableValue(tunneled);
+  } catch (const winrt::hresult_error&) {
+    // Leave active=false.
+  }
+  return flutter::EncodableValue(out);
+}
+
+static flutter::EncodableValue IsHotspotSupportedWork() {
+  MtaScope com;
+  try {
+    bool tunneled = false;
+    auto profile = PickShareProfile(tunneled);
+    if (!profile) return flutter::EncodableValue(false);
+    return flutter::EncodableValue(
+        winop::NetworkOperatorTetheringManager::
+            GetTetheringCapabilityFromConnectionProfile(profile) ==
+        winop::TetheringCapability::Enabled);
+  } catch (const winrt::hresult_error&) {
+    return flutter::EncodableValue(false);
+  } catch (const std::exception&) {
+    return flutter::EncodableValue(false);
+  }
+}
+
 void GlitchVpnCorePlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -528,6 +828,51 @@ void GlitchVpnCorePlugin::HandleMethodCall(
 
   if (method == "serviceAvailable") {
     result->Success(flutter::EncodableValue(IsCoreServiceAvailable()));
+    return;
+  }
+
+  if (method == "isHotspotSupported") {
+    RunAsync(std::move(result),
+             []() -> flutter::EncodableValue { return IsHotspotSupportedWork(); });
+    return;
+  }
+
+  if (method == "startHotspot") {
+    std::string ssid;
+    std::string password;
+    bool open = false;
+    const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    if (args) {
+      auto it = args->find(flutter::EncodableValue("ssid"));
+      if (it != args->end()) {
+        if (const auto* s = std::get_if<std::string>(&it->second)) ssid = *s;
+      }
+      it = args->find(flutter::EncodableValue("password"));
+      if (it != args->end()) {
+        if (const auto* s = std::get_if<std::string>(&it->second)) password = *s;
+      }
+      it = args->find(flutter::EncodableValue("open"));
+      if (it != args->end()) {
+        if (const auto* b = std::get_if<bool>(&it->second)) open = *b;
+      }
+    }
+    RunAsync(std::move(result),
+             [ssid = std::move(ssid), password = std::move(password),
+              open]() -> flutter::EncodableValue {
+               return StartHotspotWork(ssid, password, open);
+             });
+    return;
+  }
+
+  if (method == "stopHotspot") {
+    RunAsync(std::move(result),
+             []() -> flutter::EncodableValue { return StopHotspotWork(); });
+    return;
+  }
+
+  if (method == "getHotspotConfig") {
+    RunAsync(std::move(result),
+             []() -> flutter::EncodableValue { return GetHotspotConfigWork(); });
     return;
   }
 

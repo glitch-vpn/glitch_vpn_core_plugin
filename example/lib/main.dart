@@ -102,6 +102,14 @@ class _CoreTestPageState extends State<CoreTestPage> {
   bool _pinging = false;
   List<PingResult>? _pingResults;
 
+  final _hotspotSsidCtrl = TextEditingController(
+    text: GlitchVpnCore.defaultHotspotSsid,
+  );
+  final _hotspotPassCtrl = TextEditingController();
+  bool _hotspotOpen = false;
+  bool _hotspotBusy = false;
+  HotspotCredentials? _hotspot;
+
   @override
   void initState() {
     super.initState();
@@ -283,6 +291,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
     _proxyPortCtrl.dispose();
     _proxyUserCtrl.dispose();
     _proxyPassCtrl.dispose();
+    _hotspotSsidCtrl.dispose();
+    _hotspotPassCtrl.dispose();
     super.dispose();
   }
 
@@ -327,6 +337,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 label: Text(_buttonText(s)),
               ),
               const SizedBox(height: 12),
+              if (Platform.isWindows) ...[
+                _hotspotCard(),
+                const SizedBox(height: 12),
+              ],
               _inspectorCard(),
               const SizedBox(height: 12),
               _logsCard(),
@@ -1061,6 +1075,134 @@ class _CoreTestPageState extends State<CoreTestPage> {
     if (ms < 400) return Colors.orange;
     return Colors.red;
   }
+
+  Future<void> _startHotspot() async {
+    setState(() => _hotspotBusy = true);
+    try {
+      final creds = await GlitchVpnCore.instance.startHotspot(
+        ssid: _hotspotSsidCtrl.text,
+        password: _hotspotPassCtrl.text.trim().isEmpty
+            ? null
+            : _hotspotPassCtrl.text.trim(),
+        open: _hotspotOpen,
+      );
+      if (!mounted) return;
+      setState(() => _hotspot = creds);
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hotspot: ${e.code} - ${e.message}')),
+      );
+    } on ArgumentError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Hotspot: $e')));
+    } finally {
+      if (mounted) setState(() => _hotspotBusy = false);
+    }
+  }
+
+  Future<void> _stopHotspot() async {
+    setState(() => _hotspotBusy = true);
+    try {
+      await GlitchVpnCore.instance.stopHotspot();
+      if (!mounted) return;
+      setState(() => _hotspot = null);
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hotspot: ${e.code} - ${e.message}')),
+      );
+    } finally {
+      if (mounted) setState(() => _hotspotBusy = false);
+    }
+  }
+
+  Widget _hotspotCard() => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Wi-Fi Hotspot (via VPN tunnel)',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 180,
+                child: TextField(
+                  controller: _hotspotSsidCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'SSID',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 160,
+                child: TextField(
+                  controller: _hotspotPassCtrl,
+                  enabled: !_hotspotOpen,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'password (rnd)',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
+                    value: _hotspotOpen,
+                    visualDensity: VisualDensity.compact,
+                    onChanged: (v) =>
+                        setState(() => _hotspotOpen = v ?? false),
+                  ),
+                  const Text('open (no password)',
+                      style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              FilledButton.icon(
+                icon: Icon(
+                  _hotspot == null ? Icons.wifi_tethering : Icons.wifi_off,
+                  size: 16,
+                ),
+                label: Text(_hotspot == null ? 'Start' : 'Stop'),
+                onPressed: _hotspotBusy
+                    ? null
+                    : (_hotspot == null ? _startHotspot : _stopHotspot),
+              ),
+            ],
+          ),
+          if (_hotspot != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4),
+              child: SelectableText(
+                'SSID: ${_hotspot!.ssid}'
+                '${_hotspot!.isOpen ? ' - open' : ' - password: ${_hotspot!.password}'}'
+                '${_hotspot!.tunneled ? ' - via VPN tunnel' : ' - NOT tunneled (connect VPN first)'}',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 
   Widget _inspectorCard() => Card(
     child: Padding(
