@@ -6,7 +6,7 @@ homepage: https://github.com/glitch-vpn/glitch_vpn_core_plugin
 # Pinned core release for android/build.gradle and windows/CMakeLists.txt.
 # libglitchcore_sha256 is optional (release zip); when set, downloads are verified.
 libglitchcore_version: v0.1.0
-libglitchcore_sha256: 45b1bd669e25e779c56af5fb2a8f2aba8d3d968fd9bbb498c0bc881ee7d83cd6
+libglitchcore_sha256: 27d49f0d4af4281baa525772931afbbffdaad2da9826fd705a253868fa228f21
 
 environment:
   sdk: ^3.8.1
