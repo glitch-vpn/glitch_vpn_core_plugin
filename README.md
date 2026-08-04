@@ -15,6 +15,9 @@ await GlitchVpnCore.initialize();
 
 core.onStatusChanged.listen((s) => print(s.status));
 core.onStatsChanged.listen((s) => print('${s.downloadBytes}/${s.uploadBytes}'));
+// The connected server and the exit IPs seen through the tunnel:
+core.onServerSelectionChanged.listen((s) => print('via ${s.selected?.displayName}'));
+core.onExternalIpChanged.listen((ip) => print('${ip.ipv4} / ${ip.ipv6}'));
 
 await core.connect(
   engine: VpnEngine.xray,
@@ -45,6 +48,20 @@ The app under `example/` covers the whole API and doubles as a test client.
   in `proxyCredentials`.
 * Streams for status, traffic and memory stats, liveness, structured logs and
   a per-connection inspector (off by default).
+* `onServerSelectionChanged` / `serverSelection`: the connected server (name
+  from the link's `#remark`, host, port, protocol, index) - for a single link
+  that link, for a multi-link pool the balancer's pick: awg picks once at
+  connect, xray `leastping` and mihomo `url-test`/`fallback` are followed
+  live; per-connection strategies report the pool with `selected == null`.
+* `onExternalIpChanged` / `externalIp`: external IPv4/IPv6 fetched through the
+  tunnel after link-up, refreshed on recovery and server change. Configurable
+  via `resolveExternalIp` / `ipv4EchoUrl` / `ipv6EchoUrl` on `connect()`
+  (defaults: ipify). Not available for awg on Android (reported as
+  `unsupported`); IPv6 honours `disableIPv6`.
+* Session restore: when an app starts over a still-running tunnel (relaunch
+  with the Android foreground service alive, or the Windows service), calling
+  `initialize()` replays the session's state - connected status, server
+  selection, external IPs, stats - without a reconnect.
 * `measurePings(links)`: url-test latency for a server list without
   connecting.
 * Runtime geo provisioning: `GeoManager` downloads geoip.dat/geosite.dat from

@@ -9,6 +9,8 @@ import 'package:glitch_vpn_core/glitch_vpn_core.dart';
 import 'package:glitch_vpn_core/vpn_status_channel.dart';
 import 'package:glitch_vpn_core/vpn_stats_channel.dart';
 import 'package:glitch_vpn_core/vpn_conn_channel.dart';
+import 'package:glitch_vpn_core/vpn_server_channel.dart';
+import 'package:glitch_vpn_core/vpn_ip_channel.dart';
 
 void main() {
   runZonedGuarded(() => runApp(const CoreTestApp()), (error, stack) {
@@ -70,11 +72,14 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _proxyUserCtrl = TextEditingController();
   final _proxyPassCtrl = TextEditingController();
   final _probeUrlCtrl = TextEditingController();
+  final _ipEchoV4Ctrl = TextEditingController();
+  final _ipEchoV6Ctrl = TextEditingController();
   final _muxCtrl = TextEditingController();
   final _xudpCtrl = TextEditingController();
   String _fingerprint = '';
   bool _proxyMode = false;
   bool _proxyAuth = true;
+  bool _resolveExternalIp = true;
 
   VpnEngine _engine = VpnEngine.xray;
   List<VpnEngine> _availableEngines = VpnEngine.values;
@@ -217,6 +222,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
         proxyPass: _proxyPassCtrl.text.trim().isEmpty
             ? null
             : _proxyPassCtrl.text.trim(),
+        resolveExternalIp: _resolveExternalIp,
+        ipv4EchoUrl: _ipEchoV4Ctrl.text.trim(),
+        ipv6EchoUrl: _ipEchoV6Ctrl.text.trim(),
       );
       await _refreshCapabilities();
     } on PlatformException catch (e) {
@@ -278,6 +286,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
     _dnsServersCtrl.dispose();
     _fakeIpFilterCtrl.dispose();
     _probeUrlCtrl.dispose();
+    _ipEchoV4Ctrl.dispose();
+    _ipEchoV6Ctrl.dispose();
     _muxCtrl.dispose();
     _xudpCtrl.dispose();
     _proxyPortCtrl.dispose();
@@ -452,6 +462,41 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   ),
               ],
             ),
+          ),
+          ValueListenableBuilder<VpnServerSelection?>(
+            valueListenable: VpnServerChannel.instance.listenable,
+            builder: (context, sel, _) {
+              if (sel == null) return const SizedBox.shrink();
+              final picked = sel.selected;
+              final label = picked == null
+                  ? 'per-connection (${sel.strategy})'
+                  : '${picked.displayName}'
+                        '${picked.port > 0 ? ':${picked.port}' : ''}'
+                        ' (#${picked.index + 1}/${sel.total}'
+                        '${sel.strategy.isNotEmpty ? ', ${sel.strategy}' : ''})';
+              return Text(
+                'server: $label',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              );
+            },
+          ),
+          ValueListenableBuilder<VpnExternalIp?>(
+            valueListenable: VpnIpChannel.instance.listenable,
+            builder: (context, ip, _) {
+              if (ip == null) return const SizedBox.shrink();
+              if (ip.unsupported) {
+                return const Text(
+                  'external IP: not resolvable on this engine/platform',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                );
+              }
+              final v4 = ip.ipv4 ?? '- (${ip.ipv4Error ?? '?'})';
+              final v6 = ip.ipv6 ?? '- (${ip.ipv6Error ?? '?'})';
+              return Text(
+                'IPv4 $v4\nIPv6 $v6',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              );
+            },
           ),
         ],
       ),
@@ -789,8 +834,45 @@ class _CoreTestPageState extends State<CoreTestPage> {
                     'dns=normal, domain routing does not work without it.',
                 child: Text('sniffing'),
               ),
+              const SizedBox(width: 12),
+              Checkbox(
+                value: _resolveExternalIp,
+                onChanged: (v) =>
+                    setState(() => _resolveExternalIp = v ?? true),
+              ),
+              const Tooltip(
+                message: 'Fetch the external IPv4/IPv6 through the tunnel '
+                    'after link-up (IPEvent).',
+                child: Text('external IP'),
+              ),
             ],
           ),
+          if (_resolveExternalIp)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _ipEchoV4Ctrl,
+                    decoration: const InputDecoration(
+                      labelText: 'IPv4 echo URL',
+                      hintText: 'https://api.ipify.org (default)',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _ipEchoV6Ctrl,
+                    decoration: const InputDecoration(
+                      labelText: 'IPv6 echo URL',
+                      hintText: 'https://api6.ipify.org (default)',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
     ),

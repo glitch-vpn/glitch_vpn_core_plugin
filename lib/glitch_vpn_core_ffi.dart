@@ -17,6 +17,8 @@ enum GlitchVpnCoreFfiEventCode {
   engineStopRejectedNotRunning(507),
   statsEvent(300),
   statsError(301),
+  serverEvent(302),
+  ipEvent(303),
   logEvent(400),
   logError(401),
   connEvent(402);
@@ -46,6 +48,10 @@ enum GlitchVpnCoreFfiEventCode {
         return GlitchVpnCoreFfiEventCode.statsEvent;
       case 301:
         return GlitchVpnCoreFfiEventCode.statsError;
+      case 302:
+        return GlitchVpnCoreFfiEventCode.serverEvent;
+      case 303:
+        return GlitchVpnCoreFfiEventCode.ipEvent;
       case 400:
         return GlitchVpnCoreFfiEventCode.logEvent;
       case 401:

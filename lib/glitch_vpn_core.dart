@@ -11,6 +11,8 @@ import 'package:glitch_vpn_core/vpn_status_channel.dart';
 import 'package:glitch_vpn_core/vpn_stats_channel.dart';
 import 'package:glitch_vpn_core/vpn_logs_channel.dart';
 import 'package:glitch_vpn_core/vpn_conn_channel.dart';
+import 'package:glitch_vpn_core/vpn_server_channel.dart';
+import 'package:glitch_vpn_core/vpn_ip_channel.dart';
 
 /// Plugin-wide defaults; per-call [connect] args override them.
 class GlitchVpnCoreConfig {
@@ -215,6 +217,30 @@ class GlitchVpnCore {
 
   /// Emits while [setConnectionInspector] is on.
   Stream<VpnConnEvent> get onConnEvent => VpnConnChannel.instance.stream;
+
+  /// The connected server (the balancer's pick for multi-link pools);
+  /// leastping/url-test can switch it mid-session. The stream stays silent on
+  /// session end - pair it with [onStatusChanged], or use the listenable,
+  /// which nulls on reset.
+  Stream<VpnServerSelection> get onServerSelectionChanged =>
+      VpnServerChannel.instance.stream;
+
+  ValueListenable<VpnServerSelection?> get serverSelectionListenable =>
+      VpnServerChannel.instance.listenable;
+
+  /// Null until the core reports one.
+  VpnServerSelection? get serverSelection => VpnServerChannel.instance.value;
+
+  /// External IPv4/IPv6 fetched through the tunnel; refreshed on link
+  /// recovery and on server change. Silent on session end - see
+  /// [onServerSelectionChanged].
+  Stream<VpnExternalIp> get onExternalIpChanged => VpnIpChannel.instance.stream;
+
+  ValueListenable<VpnExternalIp?> get externalIpListenable =>
+      VpnIpChannel.instance.listenable;
+
+  /// Null until the first in-tunnel fetch completes.
+  VpnExternalIp? get externalIp => VpnIpChannel.instance.value;
 
   int _maxLogLines = 500;
   int _maxConnEvents = 100;
@@ -701,6 +727,10 @@ class GlitchVpnCore {
     int? muxConcurrency,
     int? xudpConcurrency,
     String fingerprint = '', // one of [fingerprintsFor]; empty keeps link's
+    // External-IP resolution through the tunnel → [onExternalIpChanged].
+    bool resolveExternalIp = true,
+    String ipv4EchoUrl = '', // empty → core default (api.ipify.org)
+    String ipv6EchoUrl = '', // empty → core default (api6.ipify.org)
   }) async {
     await _withTransitionLock(() async {
       final currentStatus = VpnStatusChannel.instance.value.status;
@@ -772,6 +802,9 @@ class GlitchVpnCore {
             muxConcurrency: muxConcurrency,
             xudpConcurrency: xudpConcurrency,
             fingerprint: fingerprint,
+            resolveExternalIp: resolveExternalIp,
+            ipv4EchoUrl: ipv4EchoUrl,
+            ipv6EchoUrl: ipv6EchoUrl,
           );
           break;
         case VpnEngine.awg:
@@ -781,8 +814,12 @@ class GlitchVpnCore {
             splitTunnelingType: splitTunnelingType,
             splitTunnelingApps: splitTunnelingApps,
             dns: dns,
+            balancerStrategy: balancerStrategy,
             probeUrl: probeUrl,
             livenessIntervalSec: livenessIntervalSec,
+            resolveExternalIp: resolveExternalIp,
+            ipv4EchoUrl: ipv4EchoUrl,
+            ipv6EchoUrl: ipv6EchoUrl,
           );
           break;
         case VpnEngine.mihomo:
@@ -803,6 +840,9 @@ class GlitchVpnCore {
             probeUrl: probeUrl,
             livenessIntervalSec: livenessIntervalSec,
             fingerprint: fingerprint,
+            resolveExternalIp: resolveExternalIp,
+            ipv4EchoUrl: ipv4EchoUrl,
+            ipv6EchoUrl: ipv6EchoUrl,
           );
           break;
       }
@@ -833,6 +873,24 @@ class GlitchVpnCore {
     });
   }
 
+  // Listeners must not show the previous session's data while a new tunnel
+  // is coming up.
+  static void _resetSessionChannels() {
+    VpnServerChannel.instance.reset();
+    VpnIpChannel.instance.reset();
+  }
+
+  static void _applyIpResolveOpts(
+    Map<String, String> opts, {
+    required bool resolveExternalIp,
+    required String ipv4EchoUrl,
+    required String ipv6EchoUrl,
+  }) {
+    if (!resolveExternalIp) opts['resolveExternalIp'] = '0';
+    if (ipv4EchoUrl.trim().isNotEmpty) opts['ipv4EchoUrl'] = ipv4EchoUrl.trim();
+    if (ipv6EchoUrl.trim().isNotEmpty) opts['ipv6EchoUrl'] = ipv6EchoUrl.trim();
+  }
+
   Future<void> _connectXrayCore(
     String config, {
     String? dnsAddress,
@@ -853,6 +911,9 @@ class GlitchVpnCore {
     int? muxConcurrency,
     int? xudpConcurrency,
     String fingerprint = '',
+    bool resolveExternalIp = true,
+    String ipv4EchoUrl = '',
+    String ipv6EchoUrl = '',
   }) async {
     await initialize();
     // Proxy mode exposes a loopback SOCKS - no TUN, so no admin/prepareTunnel.
@@ -876,6 +937,7 @@ class GlitchVpnCore {
     final effectiveSplitApps = splitTunnelingApps ?? _config.splitTunnelingApps;
 
     VpnStatusChannel.instance.emit(VpnStatus.connecting);
+    _resetSessionChannels();
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
@@ -923,6 +985,12 @@ class GlitchVpnCore {
     if (muxConcurrency != null) opts['muxConcurrency'] = '$muxConcurrency';
     if (xudpConcurrency != null) opts['xudpConcurrency'] = '$xudpConcurrency';
     if (fingerprint.trim().isNotEmpty) opts['fingerprint'] = fingerprint.trim();
+    _applyIpResolveOpts(
+      opts,
+      resolveExternalIp: resolveExternalIp,
+      ipv4EchoUrl: ipv4EchoUrl,
+      ipv6EchoUrl: ipv6EchoUrl,
+    );
 
     final res = GlitchVpnCoreFfi.instance.engineStart(
       'xray',
@@ -966,8 +1034,12 @@ class GlitchVpnCore {
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
     VpnDns? dns,
+    String balancerStrategy = '',
     String probeUrl = '',
     int? livenessIntervalSec,
+    bool resolveExternalIp = true,
+    String ipv4EchoUrl = '',
+    String ipv6EchoUrl = '',
   }) async {
     await initialize();
     final elevated = await ensureAdmin();
@@ -995,6 +1067,7 @@ class GlitchVpnCore {
     if (awgDns.isEmpty) awgDns = effectiveDns;
 
     VpnStatusChannel.instance.emit(VpnStatus.connecting);
+    _resetSessionChannels();
 
     String addr = _extractWgAddress(config);
     int fd = -1;
@@ -1030,17 +1103,25 @@ class GlitchVpnCore {
         throw PlatformException(code: 'PREPARE_TUNNEL_FAILED');
       }
     }
+    final awgOpts = <String, String>{
+      if (balancerStrategy.isNotEmpty) 'balancerStrategy': balancerStrategy,
+      if (probeUrl.trim().isNotEmpty) 'probeUrl': probeUrl.trim(),
+      if (livenessIntervalSec != null)
+        'livenessIntervalSec': '$livenessIntervalSec',
+    };
+    _applyIpResolveOpts(
+      awgOpts,
+      resolveExternalIp: resolveExternalIp,
+      ipv4EchoUrl: ipv4EchoUrl,
+      ipv6EchoUrl: ipv6EchoUrl,
+    );
     final res = GlitchVpnCoreFfi.instance.engineStart(
       'awg',
       config: config,
       tunFd: fd,
       dns: awgDns,
       logLevel: _config.logLevel,
-      opts: {
-        if (probeUrl.trim().isNotEmpty) 'probeUrl': probeUrl.trim(),
-        if (livenessIntervalSec != null)
-          'livenessIntervalSec': '$livenessIntervalSec',
-      },
+      opts: awgOpts,
     );
     if (res == 0) {
       _activeTunnel = 'awg';
@@ -1070,6 +1151,9 @@ class GlitchVpnCore {
     String probeUrl = '',
     int? livenessIntervalSec,
     String fingerprint = '',
+    bool resolveExternalIp = true,
+    String ipv4EchoUrl = '',
+    String ipv6EchoUrl = '',
   }) async {
     await initialize();
     // Proxy mode exposes a loopback mixed inbound - no TUN, so no admin/prepareTunnel.
@@ -1091,6 +1175,7 @@ class GlitchVpnCore {
     final effectiveSplitApps = splitTunnelingApps ?? _config.splitTunnelingApps;
 
     VpnStatusChannel.instance.emit(VpnStatus.connecting);
+    _resetSessionChannels();
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
@@ -1127,6 +1212,12 @@ class GlitchVpnCore {
       opts['livenessIntervalSec'] = '$livenessIntervalSec';
     }
     if (fingerprint.trim().isNotEmpty) opts['fingerprint'] = fingerprint.trim();
+    _applyIpResolveOpts(
+      opts,
+      resolveExternalIp: resolveExternalIp,
+      ipv4EchoUrl: ipv4EchoUrl,
+      ipv6EchoUrl: ipv6EchoUrl,
+    );
 
     final res = GlitchVpnCoreFfi.instance.engineStart(
       'mihomo',
@@ -1178,9 +1269,10 @@ class GlitchVpnCore {
       if (engine.isNotEmpty) {
         GlitchVpnCoreFfi.instance.engineStop(engine);
       } else {
-        // Clear Android notification when no core is running.
+        // No running core: 504 will never arrive to do the cleanup.
         await _stopTunnelSilently();
         _activeTunnel = null;
+        _resetSessionChannels();
         VpnStatusChannel.instance.emit(VpnStatus.disconnected);
         return;
       }
@@ -1235,6 +1327,7 @@ class GlitchVpnCore {
         );
         await _stopTunnelSilently();
         _activeTunnel = null;
+        _resetSessionChannels();
         break;
 
       case GlitchVpnCoreFfiEventCode.engineDisconnecting:
@@ -1248,10 +1341,12 @@ class GlitchVpnCore {
         if (VpnStatusChannel.instance.value.status == VpnStatus.error) {
           await _stopTunnelSilently();
           _activeTunnel = null;
+          _resetSessionChannels();
           break;
         }
         await _stopTunnelSilently();
         _activeTunnel = null;
+        _resetSessionChannels();
         VpnStatusChannel.instance.emit(VpnStatus.disconnected);
         break;
 
@@ -1262,6 +1357,7 @@ class GlitchVpnCore {
         VpnStatusChannel.instance.emit(VpnStatus.error, reason: reason);
         await _stopTunnelSilently();
         _activeTunnel = null;
+        _resetSessionChannels();
         break;
 
       case GlitchVpnCoreFfiEventCode.statsEvent:
@@ -1297,6 +1393,14 @@ class GlitchVpnCore {
       case GlitchVpnCoreFfiEventCode.connEvent:
         final conn = VpnConnEvent.tryParse(msg as String);
         if (conn != null) VpnConnChannel.instance.emit(conn);
+        break;
+      case GlitchVpnCoreFfiEventCode.serverEvent:
+        final sel = VpnServerSelection.tryParse(msg as String);
+        if (sel != null) VpnServerChannel.instance.emit(sel);
+        break;
+      case GlitchVpnCoreFfiEventCode.ipEvent:
+        final ip = VpnExternalIp.tryParse(msg as String);
+        if (ip != null) VpnIpChannel.instance.emit(ip);
         break;
       case GlitchVpnCoreFfiEventCode.statsError:
       case GlitchVpnCoreFfiEventCode.logEvent:

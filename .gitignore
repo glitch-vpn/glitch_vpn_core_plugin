@@ -24,7 +24,3 @@ android/src/main/jniLibs/
 windows/libs/
 linux/libs/
 windows/include/wintun.h
-
-# Local dev files
-/CLAUDE.md
-.claude/
