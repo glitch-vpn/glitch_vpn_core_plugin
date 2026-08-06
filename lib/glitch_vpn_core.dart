@@ -5,7 +5,6 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
-import 'package:glitch_vpn_core/geo_manager.dart';
 import 'package:glitch_vpn_core/glitch_vpn_core_ffi.dart';
 import 'package:glitch_vpn_core/vpn_status_channel.dart';
 import 'package:glitch_vpn_core/vpn_stats_channel.dart';
@@ -28,16 +27,6 @@ class GlitchVpnCoreConfig {
   final String? disconnectNotificationTitle;
   final String? disconnectNotificationSubtitle;
 
-  /// Empty URL keeps the last downloaded copy. See [GeoManager].
-  static const String defaultGeoVersion = '202607050337';
-  static const String defaultGeoipUrl =
-      'https://github.com/v2fly/geoip/releases/download/202607050337/geoip.dat';
-  static const String defaultGeositeUrl =
-      'https://github.com/v2fly/domain-list-community/releases/download/20260711103457/dlc.dat';
-  final String geoipUrl;
-  final String geositeUrl;
-  final Duration geoUpdateInterval;
-
   const GlitchVpnCoreConfig({
     this.logLevel = 0,
     this.dnsAddress = '1.1.1.1',
@@ -47,9 +36,6 @@ class GlitchVpnCoreConfig {
     this.splitTunnelingApps = const <String>[],
     this.disconnectNotificationTitle,
     this.disconnectNotificationSubtitle,
-    this.geoipUrl = defaultGeoipUrl,
-    this.geositeUrl = defaultGeositeUrl,
-    this.geoUpdateInterval = const Duration(days: 7),
   });
 
   GlitchVpnCoreConfig copyWith({
@@ -61,9 +47,6 @@ class GlitchVpnCoreConfig {
     List<String>? splitTunnelingApps,
     String? disconnectNotificationTitle,
     String? disconnectNotificationSubtitle,
-    String? geoipUrl,
-    String? geositeUrl,
-    Duration? geoUpdateInterval,
   }) => GlitchVpnCoreConfig(
     logLevel: logLevel ?? this.logLevel,
     dnsAddress: dnsAddress ?? this.dnsAddress,
@@ -75,9 +58,6 @@ class GlitchVpnCoreConfig {
         disconnectNotificationTitle ?? this.disconnectNotificationTitle,
     disconnectNotificationSubtitle:
         disconnectNotificationSubtitle ?? this.disconnectNotificationSubtitle,
-    geoipUrl: geoipUrl ?? this.geoipUrl,
-    geositeUrl: geositeUrl ?? this.geositeUrl,
-    geoUpdateInterval: geoUpdateInterval ?? this.geoUpdateInterval,
   );
 }
 
@@ -96,16 +76,35 @@ enum MemoryLimit {
   final int bytes;
 }
 
-/// Routing for xray/mihomo. Matchers use prefixes (`geoip:`, `geosite:`,
-/// `domain:`, `full:`, `keyword:`, `regexp:`, `process:`) or bare IP/CIDR/host.
-/// Priority: block → direct → proxy → local → mode catch-all.
+/// One ordered rule group; within a tier block beats direct beats proxy.
+/// Matchers use prefixes (`geoip:`, `geosite:`, `domain:`, `full:`,
+/// `keyword:`, `regexp:`, `process:`) or bare IP/CIDR/host. `domain:`/`full:`
+/// match on label boundaries, so `domain:ru` covers `ru` and every `*.ru`;
+/// dots around the zone are stripped (`.ru` ≡ `ru`). `keyword:` is a
+/// substring and keeps its dots.
+class VpnRoutingTier {
+  final List<String> block;
+  final List<String> direct;
+  final List<String> proxy;
+
+  const VpnRoutingTier({
+    this.block = const [],
+    this.direct = const [],
+    this.proxy = const [],
+  });
+}
+
+/// Routing for xray/mihomo. Tiers are evaluated in list order, first match
+/// wins across the whole sequence; then LAN bypass and the mode catch-all.
+/// `process:` rules are the exception wherever the desktop tun2socks bridge
+/// owns the per-process split: there they keep the global priority
+/// block > direct > proxy regardless of tier order.
 class VpnRouting {
   /// '', 'proxy-all', or 'direct-all'.
   final String mode;
 
-  final List<String> proxy;
-  final List<String> direct;
-  final List<String> block;
+  /// Ordered rule groups, first evaluated first.
+  final List<VpnRoutingTier> tiers;
 
   /// RFC1918/CGNAT/loopback → direct.
   final bool localNetworksDirect;
@@ -118,9 +117,7 @@ class VpnRouting {
 
   const VpnRouting({
     this.mode = '',
-    this.proxy = const [],
-    this.direct = const [],
-    this.block = const [],
+    this.tiers = const [],
     this.localNetworksDirect = false,
     this.disableIPv6 = false,
     this.disableUDP = false,
@@ -128,15 +125,36 @@ class VpnRouting {
 
   Map<String, String> toOpts() {
     final opts = <String, String>{};
-    void put(String k, List<String> v) {
-      final cleaned = v.map((e) => e.trim()).where((e) => e.isNotEmpty);
-      if (cleaned.isNotEmpty) opts[k] = cleaned.join(',');
-    }
+    List<String> clean(List<String> v) =>
+        v.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final cleaned = tiers
+        .map(
+          (t) => (
+            block: clean(t.block),
+            direct: clean(t.direct),
+            proxy: clean(t.proxy),
+          ),
+        )
+        .where((t) => t.block.isNotEmpty || t.direct.isNotEmpty || t.proxy.isNotEmpty)
+        .toList();
 
     if (mode.isNotEmpty) opts['routingMode'] = mode;
-    put('proxyRules', proxy);
-    put('directRules', direct);
-    put('blockRules', block);
+    if (cleaned.length == 1) {
+      // Single tier rides the legacy keys, so an older core keeps working.
+      final t = cleaned.first;
+      if (t.proxy.isNotEmpty) opts['proxyRules'] = t.proxy.join(',');
+      if (t.direct.isNotEmpty) opts['directRules'] = t.direct.join(',');
+      if (t.block.isNotEmpty) opts['blockRules'] = t.block.join(',');
+    } else if (cleaned.length > 1) {
+      opts['routingTiers'] = jsonEncode([
+        for (final t in cleaned)
+          {
+            if (t.block.isNotEmpty) 'block': t.block,
+            if (t.direct.isNotEmpty) 'direct': t.direct,
+            if (t.proxy.isNotEmpty) 'proxy': t.proxy,
+          },
+      ]);
+    }
     if (localNetworksDirect) opts['localNetworksDirect'] = '1';
     if (disableIPv6) opts['disableIPv6'] = '1';
     if (disableUDP) opts['disableUDP'] = '1';
@@ -153,6 +171,18 @@ List<String> balancerStrategiesFor(VpnEngine engine) {
       return const ['url-test', 'fallback', 'load-balance', 'load-balance-hash'];
     case VpnEngine.awg:
       return const ['leastping', 'random', 'fallback'];
+  }
+}
+
+/// xray router domain strategies (whether the router resolves domain-form
+/// requests to match IP rules); other engines have no equivalent → empty.
+List<String> domainStrategiesFor(VpnEngine engine) {
+  switch (engine) {
+    case VpnEngine.xray:
+      return const ['asis', 'ipifnonmatch', 'ipondemand'];
+    case VpnEngine.mihomo:
+    case VpnEngine.awg:
+      return const [];
   }
 }
 
@@ -176,23 +206,39 @@ List<String> fingerprintsFor(VpnEngine engine) {
 
 enum VpnDnsMode { fakeIp, normal }
 
-/// DNS for xray/mihomo (awg uses the first plain server only).
-/// Schemes: plain / `tls://` / `https://` / `quic://` / `tcp://`.
+/// DNS for xray/mihomo (awg uses the first plain server only, and takes it
+/// verbatim — no port suffix there).
+/// Schemes: plain / `tls://` / `https://` / `quic://` / `tcp://`; a plain
+/// server may carry a port (`10.0.0.1:5353`).
 class VpnDns {
   final VpnDnsMode mode;
   final List<String> servers;
   final List<String> fakeIpFilter;
 
+  /// Static name → addresses; keys take xray matcher prefixes verbatim. An
+  /// entry with several values keeps only IPs — an alias name is single-valued.
+  /// awg ignores.
+  final Map<String, List<String>> hosts;
+
+  /// Resolvers for direct-routed names. fake-ip covers every direct dial on
+  /// both engines; xray's normal mode falls back to the direct domain rules,
+  /// and direct-all inverts the split (README). awg ignores.
+  final List<String> directServers;
+
   const VpnDns({
     this.mode = VpnDnsMode.fakeIp,
     this.servers = const [],
     this.fakeIpFilter = const [],
+    this.hosts = const {},
+    this.directServers = const [],
   });
 
   Map<String, dynamic> toJson() => {
     'mode': mode == VpnDnsMode.fakeIp ? 'fake-ip' : 'normal',
     if (servers.isNotEmpty) 'servers': servers,
     if (fakeIpFilter.isNotEmpty) 'fakeIpFilter': fakeIpFilter,
+    if (hosts.isNotEmpty) 'hosts': hosts,
+    if (directServers.isNotEmpty) 'directServers': directServers,
   };
 }
 
@@ -357,9 +403,6 @@ class GlitchVpnCore {
     List<String>? splitTunnelingApps,
     String? disconnectNotificationTitle,
     String? disconnectNotificationSubtitle,
-    String? geoipUrl,
-    String? geositeUrl,
-    Duration? geoUpdateInterval,
   }) {
     _config = _config.copyWith(
       logLevel: logLevel,
@@ -370,9 +413,6 @@ class GlitchVpnCore {
       splitTunnelingApps: splitTunnelingApps,
       disconnectNotificationTitle: disconnectNotificationTitle,
       disconnectNotificationSubtitle: disconnectNotificationSubtitle,
-      geoipUrl: geoipUrl,
-      geositeUrl: geositeUrl,
-      geoUpdateInterval: geoUpdateInterval,
     );
     if (disconnectNotificationTitle != null ||
         disconnectNotificationSubtitle != null) {
@@ -468,8 +508,6 @@ class GlitchVpnCore {
       _ch.setMethodCallHandler(_onNativeCall);
       _handlerInstalled = true;
     }
-
-    await _ensureGeoAssets();
 
     // Re-register after UI restore / process death.
     GlitchVpnCoreFfi.instance.registerStatus(_onCoreEvent);
@@ -633,33 +671,6 @@ class GlitchVpnCore {
     return '';
   }
 
-  /// Force-redownload geo (ignores freshness). Takes effect on next connect.
-  static Future<void> refreshGeoAssets() => _ensureGeoAssets(force: true);
-
-  static Future<void> _ensureGeoAssets({bool force = false}) async {
-    try {
-      final dir = await GeoManager.instance.provision(
-        geoipUrl: instance._config.geoipUrl,
-        geositeUrl: instance._config.geositeUrl,
-        maxAge: instance._config.geoUpdateInterval,
-        force: force,
-      );
-      GlitchVpnCoreFfi.instance.setEnvVar('xray.location.asset', dir);
-    } catch (e) {
-      debugPrint('geo assets: $e');
-    }
-  }
-
-  /// Newer geo release available? (GitHub URLs only.) Install via [configure] + [refreshGeoAssets].
-  static Future<Map<String, GeoUpdateInfo?>> checkGeoUpdate() async {
-    return {
-      'geoip': await GeoManager.instance.checkUpdate(instance._config.geoipUrl),
-      'geosite': await GeoManager.instance.checkUpdate(
-        instance._config.geositeUrl,
-      ),
-    };
-  }
-
   static Future<int?> _prepareTunnelInternal(Map<String, Object?> args) =>
       _ch.invokeMethod<int>('prepareTunnel', args);
 
@@ -715,6 +726,14 @@ class GlitchVpnCore {
     String balancerStrategy = '',
     VpnRouting? routing,
     VpnDns? dns,
+    // Absolute dir with geoip.dat/geosite.dat; xray/mihomo only. Empty falls
+    // back to the engine default, which exists on desktop (beside the core
+    // binary) but not on Android — geo rules there need this set. Failure
+    // modes are in the README.
+    String geoAssetsDir = '',
+    // xray only: one of [domainStrategiesFor]; empty → engine default (asis).
+    // Non-asis leaks lookups to the direct outbound under fake-ip — README.
+    String domainStrategy = '',
     int? proxyPort,
     bool proxyAuth = true, // false → open loopback SOCKS (proxy mode only)
     String? proxyUser, // null → random; read back via [proxyCredentials]
@@ -769,6 +788,30 @@ class GlitchVpnCore {
         return;
       }
 
+      final effectiveDomainStrategy = domainStrategy.trim();
+      if (effectiveDomainStrategy.isNotEmpty &&
+          !domainStrategiesFor(engine).contains(effectiveDomainStrategy)) {
+        VpnStatusChannel.instance.emit(
+          VpnStatus.error,
+          reason:
+              'domainStrategy "$domainStrategy" not supported by ${engine.name}',
+        );
+        return;
+      }
+
+      // The engine may run in the service process whose working directory the
+      // caller cannot know - a relative dir would silently fall back to the
+      // default and evaluate geo rules against the wrong database.
+      final effectiveGeoAssetsDir = geoAssetsDir.trim();
+      if (effectiveGeoAssetsDir.isNotEmpty &&
+          !debugIsAbsolutePath(effectiveGeoAssetsDir)) {
+        VpnStatusChannel.instance.emit(
+          VpnStatus.error,
+          reason: 'geoAssetsDir "$geoAssetsDir" must be an absolute path',
+        );
+        return;
+      }
+
       if (proxyPort != null && engine == VpnEngine.awg) {
         VpnStatusChannel.instance.emit(
           VpnStatus.error,
@@ -792,6 +835,8 @@ class GlitchVpnCore {
             balancerStrategy: balancerStrategy,
             routing: routing,
             dns: dns,
+            geoAssetsDir: effectiveGeoAssetsDir,
+            domainStrategy: effectiveDomainStrategy,
             proxyPort: proxyPort,
             proxyAuth: proxyAuth,
             proxyUser: proxyUser,
@@ -832,6 +877,7 @@ class GlitchVpnCore {
             dns: dns,
             balancerStrategy: balancerStrategy,
             routing: routing,
+            geoAssetsDir: effectiveGeoAssetsDir,
             proxyPort: proxyPort,
             proxyAuth: proxyAuth,
             proxyUser: proxyUser,
@@ -880,6 +926,13 @@ class GlitchVpnCore {
     VpnIpChannel.instance.reset();
   }
 
+  /// Mirrors Go's `filepath.IsAbs` for the running platform.
+  @visibleForTesting
+  static bool debugIsAbsolutePath(String p, {bool? windows}) =>
+      (windows ?? Platform.isWindows)
+      ? RegExp(r'^([A-Za-z]:[\\/]|\\\\)').hasMatch(p)
+      : p.startsWith('/');
+
   static void _applyIpResolveOpts(
     Map<String, String> opts, {
     required bool resolveExternalIp,
@@ -901,6 +954,8 @@ class GlitchVpnCore {
     String balancerStrategy = '',
     VpnRouting? routing,
     VpnDns? dns,
+    String geoAssetsDir = '',
+    String domainStrategy = '',
     int? proxyPort,
     bool proxyAuth = true,
     String? proxyUser,
@@ -965,10 +1020,15 @@ class GlitchVpnCore {
     final opts = <String, String>{...?routing?.toOpts()};
     if (balancerStrategy.isNotEmpty) opts['balancerStrategy'] = balancerStrategy;
     // Legacy alias: bypassCountries → direct geoip:<cc>, unless routing already
-    // supplied a direct list.
-    if (bypassCountries.isNotEmpty && !opts.containsKey('directRules')) {
+    // supplied direct rules (flat or tiered).
+    if (bypassCountries.isNotEmpty &&
+        !opts.containsKey('directRules') &&
+        !opts.containsKey('routingTiers')) {
       opts['bypassCountries'] = bypassCountries;
     }
+    // connect() already trimmed and validated both.
+    if (geoAssetsDir.isNotEmpty) opts['geoAssetsDir'] = geoAssetsDir;
+    if (domainStrategy.isNotEmpty) opts['domainStrategy'] = domainStrategy;
     if (proxyMode) {
       opts['proxyPort'] = '$proxyPort';
       if (proxyAuth) {
@@ -1143,6 +1203,7 @@ class GlitchVpnCore {
     VpnDns? dns,
     String balancerStrategy = '',
     VpnRouting? routing,
+    String geoAssetsDir = '',
     int? proxyPort,
     bool proxyAuth = true,
     String? proxyUser,
@@ -1198,6 +1259,8 @@ class GlitchVpnCore {
 
     final opts = <String, String>{...?routing?.toOpts()};
     if (balancerStrategy.isNotEmpty) opts['balancerStrategy'] = balancerStrategy;
+    // connect() already trimmed and validated it.
+    if (geoAssetsDir.isNotEmpty) opts['geoAssetsDir'] = geoAssetsDir;
     if (proxyMode) {
       opts['proxyPort'] = '$proxyPort';
       if (proxyAuth) {
@@ -1436,21 +1499,45 @@ class GlitchVpnCore {
 
   static Set<String>? _engineIdsCache;
 
-  /// Engine ids linked in this binary (cached).
-  static Future<Set<String>> engineIds() async {
-    if (_engineIdsCache != null) return _engineIdsCache!;
+  /// Reads the capabilities JSON instead of [getCapabilitiesJson] when set,
+  /// so the cache rule below is testable without the native library.
+  @visibleForTesting
+  static Future<String> Function()? debugCapabilitiesJsonProvider;
+
+  @visibleForTesting
+  static void debugResetEngineIdsCache() => _engineIdsCache = null;
+
+  /// `{"engines": [...]}` → the string ids; anything malformed → empty set,
+  /// never a throw (the payload crosses the FFI boundary).
+  static Set<String> _parseEngineIds(String json) {
     final ids = <String>{};
     try {
-      final decoded = jsonDecode(await getCapabilitiesJson());
+      final decoded = jsonDecode(json);
       if (decoded is Map && decoded['engines'] is List) {
         for (final e in decoded['engines'] as List) {
           if (e is String) ids.add(e);
         }
       }
+    } catch (_) {}
+    return ids;
+  }
+
+  /// Engine ids linked in this binary. An empty result (garbled or failed
+  /// read) is returned but never cached, so a later call retries instead of
+  /// reporting "no engines" for the process lifetime.
+  static Future<Set<String>> engineIds() async {
+    final cached = _engineIdsCache;
+    if (cached != null) return cached;
+    var ids = const <String>{};
+    try {
+      final json =
+          await (debugCapabilitiesJsonProvider?.call() ??
+              getCapabilitiesJson());
+      ids = _parseEngineIds(json);
     } catch (_) {
-      // leave empty; treated as "unknown", callers fall back permissively
+      // empty; treated as "unknown", callers fall back permissively
     }
-    _engineIdsCache = ids;
+    if (ids.isNotEmpty) _engineIdsCache = ids;
     return ids;
   }
 
@@ -1586,6 +1673,19 @@ class GlitchVpnCore {
       final path = await _ch.invokeMethod<String>('pickExecutable');
       if (path == null || path.trim().isEmpty) return null;
       return path.replaceAll('/', '\\').split('\\').last;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Windows folder picker → absolute path, or null (cancelled/other platform).
+  /// For [connect]'s `geoAssetsDir`.
+  Future<String?> pickDirectory() async {
+    if (!Platform.isWindows) return null;
+    try {
+      final path = await _ch.invokeMethod<String>('pickDirectory');
+      if (path == null || path.trim().isEmpty) return null;
+      return path.trim();
     } catch (_) {
       return null;
     }

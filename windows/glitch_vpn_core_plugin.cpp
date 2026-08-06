@@ -209,6 +209,43 @@ static std::string WideToUtf8(const std::wstring& w) {
   return s;
 }
 
+// Shell open dialog for a .exe or a folder; empty = cancelled or COM failed.
+static std::string ShowShellPicker(bool folders) {
+  ComScope com;
+  std::string picked;
+  IFileOpenDialog* dlg = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                              CLSCTX_INPROC_SERVER, IID_IFileOpenDialog,
+                              (void**)&dlg))) {
+    return picked;
+  }
+  if (folders) {
+    DWORD opts = 0;
+    if (SUCCEEDED(dlg->GetOptions(&opts))) {
+      dlg->SetOptions(opts | FOS_PICKFOLDERS);
+    }
+    dlg->SetTitle(L"Select a folder");
+  } else {
+    COMDLG_FILTERSPEC filters[] = {{L"Applications", L"*.exe"},
+                                   {L"All files", L"*.*"}};
+    dlg->SetFileTypes(2, filters);
+    dlg->SetTitle(L"Select an application");
+  }
+  if (SUCCEEDED(dlg->Show(nullptr))) {
+    IShellItem* item = nullptr;
+    if (SUCCEEDED(dlg->GetResult(&item))) {
+      PWSTR p = nullptr;
+      if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p))) {
+        picked = WideToUtf8(p);
+        CoTaskMemFree(p);
+      }
+      item->Release();
+    }
+  }
+  dlg->Release();
+  return picked;
+}
+
 static std::wstring LowerExt(const std::wstring& name) {
   if (name.size() < 4) return L"";
   std::wstring ext = name.substr(name.size() - 4);
@@ -436,30 +473,8 @@ void GlitchVpnCorePlugin::HandleMethodCall(
     return;
   }
 
-  if (method == "pickExecutable") {
-    ComScope com;
-    std::string picked;
-    IFileOpenDialog* dlg = nullptr;
-    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-                                   CLSCTX_INPROC_SERVER, IID_IFileOpenDialog,
-                                   (void**)&dlg))) {
-      COMDLG_FILTERSPEC filters[] = {{L"Applications", L"*.exe"},
-                                     {L"All files", L"*.*"}};
-      dlg->SetFileTypes(2, filters);
-      dlg->SetTitle(L"Select an application");
-      if (SUCCEEDED(dlg->Show(nullptr))) {
-        IShellItem* item = nullptr;
-        if (SUCCEEDED(dlg->GetResult(&item))) {
-          PWSTR p = nullptr;
-          if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p))) {
-            picked = WideToUtf8(p);
-            CoTaskMemFree(p);
-          }
-          item->Release();
-        }
-      }
-      dlg->Release();
-    }
+  if (method == "pickExecutable" || method == "pickDirectory") {
+    const std::string picked = ShowShellPicker(method == "pickDirectory");
     if (picked.empty()) {
       result->Success(flutter::EncodableValue());  // null → user cancelled
     } else {

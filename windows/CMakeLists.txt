@@ -97,7 +97,7 @@ else()
   set(_core_win "${_dl}/ffi/windows")
 endif()
 
-# Bundled next to the .exe; geo is fetched at runtime.
+# Bundled next to the .exe; geo assets are the app's own (connect geoAssetsDir).
 set(glitch_vpn_core_bundled_libraries
   "${_core_win}/libglitchcore.dll"
   "${_core_win}/wintun.dll"

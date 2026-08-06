@@ -66,12 +66,22 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _directRulesCtrl = TextEditingController();
   final _proxyRulesCtrl = TextEditingController();
   final _blockRulesCtrl = TextEditingController();
+  // Extra routing tiers below tier 1 (the three fields above).
+  final List<({
+    TextEditingController block,
+    TextEditingController direct,
+    TextEditingController proxy,
+  })> _extraTiers = [];
+  final _geoAssetsDirCtrl = TextEditingController();
   final _dnsServersCtrl = TextEditingController(text: '1.1.1.1');
   final _fakeIpFilterCtrl = TextEditingController();
+  final _dnsHostsCtrl = TextEditingController();
+  final _dnsDirectServersCtrl = TextEditingController();
   final _proxyPortCtrl = TextEditingController(text: '10808');
   final _proxyUserCtrl = TextEditingController();
   final _proxyPassCtrl = TextEditingController();
   final _probeUrlCtrl = TextEditingController();
+  final _livenessCtrl = TextEditingController();
   final _ipEchoV4Ctrl = TextEditingController();
   final _ipEchoV6Ctrl = TextEditingController();
   final _muxCtrl = TextEditingController();
@@ -85,6 +95,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   List<VpnEngine> _availableEngines = VpnEngine.values;
   String _balancerStrategy = ''; // '', leastping, random, roundrobin
   String _routingMode = ''; // '', proxy-all, direct-all
+  String _domainStrategy = ''; // xray only: '', asis, ipifnonmatch, ipondemand
   bool _localNetworksDirect = false;
   bool _disableIPv6 = false;
   bool _disableUDP = false;
@@ -94,7 +105,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
   MemoryLimit _memoryLimit = MemoryLimit.unlimited;
 
   String _capabilities = '(loading…)';
-  String _geoInfo = '';
   String _activeEngine = '';
   final List<String> _logs = [];
   StreamSubscription? _logSub;
@@ -177,6 +187,20 @@ class _CoreTestPageState extends State<CoreTestPage> {
       .where((e) => e.isNotEmpty)
       .toList();
 
+  // One `name=ip1,ip2` entry per line; `=` because keys carry `:` prefixes.
+  Map<String, List<String>> _hosts(String s) {
+    final out = <String, List<String>>{};
+    for (final raw in s.split('\n')) {
+      final line = raw.trim();
+      final eq = line.indexOf('=');
+      if (eq <= 0) continue;
+      final key = line.substring(0, eq).trim();
+      final vals = _csv(line.substring(eq + 1));
+      if (key.isNotEmpty && vals.isNotEmpty) out[key] = vals;
+    }
+    return out;
+  }
+
   Future<void> _toggle(VpnStatus status) async {
     if (status == VpnStatus.connected ||
         status == VpnStatus.connecting ||
@@ -188,9 +212,19 @@ class _CoreTestPageState extends State<CoreTestPage> {
     try {
       final routing = VpnRouting(
         mode: _routingMode,
-        direct: _csv(_directRulesCtrl.text),
-        proxy: _csv(_proxyRulesCtrl.text),
-        block: _csv(_blockRulesCtrl.text),
+        tiers: [
+          VpnRoutingTier(
+            block: _csv(_blockRulesCtrl.text),
+            direct: _csv(_directRulesCtrl.text),
+            proxy: _csv(_proxyRulesCtrl.text),
+          ),
+          for (final t in _extraTiers)
+            VpnRoutingTier(
+              block: _csv(t.block.text),
+              direct: _csv(t.direct.text),
+              proxy: _csv(t.proxy.text),
+            ),
+        ],
         localNetworksDirect: _localNetworksDirect,
         disableIPv6: _disableIPv6,
         disableUDP: _disableUDP,
@@ -199,6 +233,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
         mode: _dnsMode,
         servers: _csv(_dnsServersCtrl.text),
         fakeIpFilter: _csv(_fakeIpFilterCtrl.text),
+        hosts: _hosts(_dnsHostsCtrl.text),
+        directServers: _csv(_dnsDirectServersCtrl.text),
       );
       await GlitchVpnCore.instance.connect(
         engine: _engine,
@@ -206,8 +242,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
         balancerStrategy: _balancerStrategy,
         routing: _engine == VpnEngine.awg ? null : routing,
         dns: dns,
+        geoAssetsDir: _geoAssetsDirCtrl.text.trim(),
+        domainStrategy: _domainStrategy,
         sniffing: _sniffing,
         probeUrl: _probeUrlCtrl.text.trim(),
+        livenessIntervalSec: int.tryParse(_livenessCtrl.text.trim()),
         fingerprint: _fingerprint,
         muxConcurrency: int.tryParse(_muxCtrl.text.trim()),
         xudpConcurrency: int.tryParse(_xudpCtrl.text.trim()),
@@ -267,14 +306,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
     });
   }
 
-  Future<void> _refreshGeo() async {
-    await GlitchVpnCore.refreshGeoAssets();
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Geo assets refreshed')));
-  }
-
   @override
   void dispose() {
     _logSub?.cancel();
@@ -283,9 +314,18 @@ class _CoreTestPageState extends State<CoreTestPage> {
     _directRulesCtrl.dispose();
     _proxyRulesCtrl.dispose();
     _blockRulesCtrl.dispose();
+    for (final t in _extraTiers) {
+      t.block.dispose();
+      t.direct.dispose();
+      t.proxy.dispose();
+    }
+    _geoAssetsDirCtrl.dispose();
     _dnsServersCtrl.dispose();
     _fakeIpFilterCtrl.dispose();
+    _dnsHostsCtrl.dispose();
+    _dnsDirectServersCtrl.dispose();
     _probeUrlCtrl.dispose();
+    _livenessCtrl.dispose();
     _ipEchoV4Ctrl.dispose();
     _ipEchoV6Ctrl.dispose();
     _muxCtrl.dispose();
@@ -372,40 +412,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
             _capabilities,
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
-          const Divider(),
-          // Geo is not bundled - downloaded on demand by the plugin. These
-          // exercise the runtime geo API (pinned default source).
-          Row(
-            children: [
-              const Text('Geo:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(width: 8),
-              TextButton(
-                onPressed: () async {
-                  final upd = await GlitchVpnCore.checkGeoUpdate();
-                  if (!mounted) return;
-                  setState(() {
-                    _geoInfo = upd.entries
-                        .map((e) => '${e.key}: ${e.value ?? "?"}')
-                        .join('\n');
-                  });
-                },
-                child: const Text('check update'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  setState(() => _geoInfo = 'downloading…');
-                  await GlitchVpnCore.refreshGeoAssets();
-                  if (mounted) setState(() => _geoInfo = 'geo refreshed');
-                },
-                child: const Text('refresh'),
-              ),
-            ],
-          ),
-          if (_geoInfo.isNotEmpty)
-            Text(
-              _geoInfo,
-              style: const TextStyle(fontSize: 11, color: Colors.grey),
-            ),
         ],
       ),
     ),
@@ -521,9 +527,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
                     .toList(),
                 onChanged: (e) => setState(() {
                   _engine = e!;
-                  // strategy + fingerprint sets differ per engine
+                  // strategy/fingerprint/domain-strategy sets differ per engine
                   _balancerStrategy = '';
                   _fingerprint = '';
+                  _domainStrategy = '';
                 }),
               ),
               const Spacer(),
@@ -544,10 +551,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   }
                 }),
                 child: const Text('→awg://'),
-              ),
-              TextButton(
-                onPressed: _refreshGeo,
-                child: const Text('geo↻'),
               ),
             ],
           ),
@@ -771,16 +774,121 @@ class _CoreTestPageState extends State<CoreTestPage> {
           const Padding(
             padding: EdgeInsets.only(top: 6),
             child: Text(
-              'Rules: one matcher per line/comma. Prefix sets the type - '
+              'Rules: one matcher per comma. Prefix sets the type - '
               'geoip:cn · geosite:category-ru · domain:youtube.com · domain:рф · '
               'full:x · keyword:x · regexp:x · process:App.exe · 1.2.3.4 · '
-              '10.0.0.0/8 · ::/0. Priority: block → direct → proxy → catch-all.',
+              '10.0.0.0/8 · ::/0. domain: covers the zone and its subdomains '
+              '(domain:ru = ru + *.ru; a leading dot is stripped). Within a '
+              'tier: block → direct → proxy; tiers evaluated in order, then '
+              'LAN bypass and the mode catch-all.',
               style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text('Tier 1', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
           ),
           _geoField('direct (bypass VPN)', _directRulesCtrl, 'domain:gov.ru, geoip:ru'),
           _geoField('proxy (force via VPN)', _proxyRulesCtrl, 'domain:youtube.com, geosite:youtube'),
           _geoField('block (drop)', _blockRulesCtrl, 'domain:ads.example, geosite:category-ads-all'),
+          for (var i = 0; i < _extraTiers.length; i++)
+            Card(
+              margin: const EdgeInsets.only(top: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Tier ${i + 2}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () => setState(() {
+                            final t = _extraTiers.removeAt(i);
+                            t.block.dispose();
+                            t.direct.dispose();
+                            t.proxy.dispose();
+                          }),
+                        ),
+                      ],
+                    ),
+                    _geoField('direct', _extraTiers[i].direct, 'domain:ru'),
+                    _geoField('proxy', _extraTiers[i].proxy, 'domain:vk.ru'),
+                    _geoField('block', _extraTiers[i].block, 'geosite:ads'),
+                  ],
+                ),
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('+ tier'),
+              onPressed: () => setState(() {
+                _extraTiers.add((
+                  block: TextEditingController(),
+                  direct: TextEditingController(),
+                  proxy: TextEditingController(),
+                ));
+              }),
+            ),
+          ),
+          if (_engine == VpnEngine.xray)
+            Row(
+              children: [
+                const Text('Domain strategy:'),
+                const SizedBox(width: 8),
+                DropdownButton<String>(
+                  value: _domainStrategy,
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('default (asis)')),
+                    ...domainStrategiesFor(_engine).map(
+                      (s) => DropdownMenuItem(value: s, child: Text(s)),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _domainStrategy = v!),
+                ),
+                const Expanded(
+                  child: Text(
+                    '  (router: resolve domains to match IP rules)',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+              ],
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: _geoField(
+                  'geo assets dir (geoip.dat + geosite.dat)',
+                  _geoAssetsDirCtrl,
+                  r'C:\path\to\geo (empty = beside core binary)',
+                ),
+              ),
+              if (Platform.isWindows)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8, bottom: 2),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.folder_open, size: 16),
+                    label: const Text('browse'),
+                    onPressed: () async {
+                      final dir = await GlitchVpnCore.instance.pickDirectory();
+                      if (dir == null || !mounted) return;
+                      setState(() => _geoAssetsDirCtrl.text = dir);
+                    },
+                  ),
+                ),
+            ],
+          ),
           if (Platform.isWindows)
             Wrap(
               spacing: 8,
@@ -834,45 +942,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                     'dns=normal, domain routing does not work without it.',
                 child: Text('sniffing'),
               ),
-              const SizedBox(width: 12),
-              Checkbox(
-                value: _resolveExternalIp,
-                onChanged: (v) =>
-                    setState(() => _resolveExternalIp = v ?? true),
-              ),
-              const Tooltip(
-                message: 'Fetch the external IPv4/IPv6 through the tunnel '
-                    'after link-up (IPEvent).',
-                child: Text('external IP'),
-              ),
             ],
           ),
-          if (_resolveExternalIp)
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _ipEchoV4Ctrl,
-                    decoration: const InputDecoration(
-                      labelText: 'IPv4 echo URL',
-                      hintText: 'https://api.ipify.org (default)',
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _ipEchoV6Ctrl,
-                    decoration: const InputDecoration(
-                      labelText: 'IPv6 echo URL',
-                      hintText: 'https://api6.ipify.org (default)',
-                      isDense: true,
-                    ),
-                  ),
-                ),
-              ],
-            ),
         ],
       ),
     ),
@@ -969,20 +1040,25 @@ class _CoreTestPageState extends State<CoreTestPage> {
     });
   }
 
-  Widget _geoField(String label, TextEditingController c, String hint) =>
-      Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: TextField(
-          controller: c,
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            labelText: label,
-            hintText: hint,
-            border: const OutlineInputBorder(),
-            isDense: true,
-          ),
-        ),
-      );
+  Widget _geoField(
+    String label,
+    TextEditingController c,
+    String hint, {
+    int maxLines = 1,
+  }) => Padding(
+    padding: const EdgeInsets.only(top: 6),
+    child: TextField(
+      controller: c,
+      maxLines: maxLines,
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+    ),
+  );
 
   Widget _dnsCard() => Card(
     child: Padding(
@@ -1033,6 +1109,17 @@ class _CoreTestPageState extends State<CoreTestPage> {
               _fakeIpFilterCtrl,
               '*.lan, geosite:private',
             ),
+          _geoField(
+            'hosts (name=ip1,ip2 per line; awg ignores)',
+            _dnsHostsCtrl,
+            'dns.google=8.8.8.8,8.8.4.4',
+            maxLines: 3,
+          ),
+          _geoField(
+            'direct resolvers (csv; for direct-routed names, awg ignores)',
+            _dnsDirectServersCtrl,
+            '77.88.8.8',
+          ),
         ],
       ),
     ),
@@ -1070,10 +1157,72 @@ class _CoreTestPageState extends State<CoreTestPage> {
               labelText: 'Probe URL',
               hintText: 'https://www.gstatic.com/generate_204 (default)',
               helperText:
-                  'Used by Measure and by the balancer health-check on connect',
+                  'Used by Measure and by the balancer health-check on connect. '
+                  'http(s) only - the core ignores anything else',
               isDense: true,
             ),
           ),
+          // Probe cadence and external-IP resolution apply to every engine,
+          // awg included, so they live here rather than in the routing card
+          // (which xray/mihomo own).
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 120,
+                  child: TextField(
+                    controller: _livenessCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'liveness sec',
+                      hintText: '20',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Checkbox(
+                  value: _resolveExternalIp,
+                  onChanged: (v) =>
+                      setState(() => _resolveExternalIp = v ?? true),
+                ),
+                const Tooltip(
+                  message: 'Fetch the external IPv4/IPv6 through the tunnel '
+                      'after link-up (IPEvent).',
+                  child: Text('external IP'),
+                ),
+              ],
+            ),
+          ),
+          if (_resolveExternalIp)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _ipEchoV4Ctrl,
+                    decoration: const InputDecoration(
+                      labelText: 'IPv4 echo URL',
+                      hintText: 'https://api.ipify.org (default)',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _ipEchoV6Ctrl,
+                    decoration: const InputDecoration(
+                      labelText: 'IPv6 echo URL',
+                      hintText: 'https://api6.ipify.org (default)',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           if (_pingResults != null && _pingResults!.isEmpty)
             const Text('no links', style: TextStyle(color: Colors.grey)),
           if (_pingResults != null) ..._pingResults!.map(_pingRow),

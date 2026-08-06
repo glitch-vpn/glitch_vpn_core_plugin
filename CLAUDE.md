@@ -76,11 +76,12 @@ lib/
   vpn_conn_channel.dart       # connection inspector (opt-in)
   vpn_server_channel.dart     # connected server / balancer pick (302)
   vpn_ip_channel.dart         # external IPv4/IPv6 (303)
-  geo_manager.dart            # geoip/geosite download + cache
 android/  windows/            # platform glue: VpnService/TUN, UAC/service
 linux/ ios/ macos/            # stubs (Linux engines still run via FFI)
 example/                      # full-API test client
 test/                         # pure Dart unit tests (no native library)
+wiki/                         # user-facing docs (GitHub wiki page names);
+                              # README stays short and links here
 ```
 
 ## 4. Core contract essentials
@@ -93,8 +94,12 @@ test/                         # pure Dart unit tests (no native library)
   registered — `initialize()` is all an app needs to restore state.
 - Proxy mode (`proxyPort`) has no TUN and no elevation; awg rejects it.
 - awg ignores routing/DNS config apart from one plain resolver; validate
-  `balancerStrategy`/`fingerprint` via `balancerStrategiesFor` /
-  `fingerprintsFor` before connecting.
+  `balancerStrategy`/`fingerprint`/`domainStrategy` via
+  `balancerStrategiesFor` / `fingerprintsFor` / `domainStrategiesFor` before
+  connecting.
+- Geo assets are the app's responsibility: `connect(geoAssetsDir:)` points the
+  engine at a caller-owned dir with geoip.dat/geosite.dat; the plugin neither
+  downloads nor caches them, and `initialize()` performs no network I/O.
 - Android `prepareTunnel` returns a TUN fd; the whole app package is excluded
   from the VPN (`addDisallowedApplication`), so in-app HTTP does **not**
   traverse the tunnel — external-IP resolution happens core-side for this
@@ -131,7 +136,8 @@ cd example && flutter run -d windows        # live client against a real core
 
 dart run ffigen --config ffigen.yaml        # only after a header change;
                                             # needs dart_api*.h next to
-                                            # build/libglitchcore.h (README)
+                                            # build/libglitchcore.h
+                                            # (wiki/For-Maintainers.md)
 
 LIBGLITCHCORE_LOCAL=/path/to/libglitchcore/build_output/ffi flutter build ...
 ```

@@ -99,6 +99,9 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
 - Validation that saves a doomed connect happens before dispatch and emits
   `VpnStatus.error` with a readable reason (see the `balancerStrategy` and
   engine-availability checks).
+- Structured payloads inside the string opts map are JSON-encoded strings
+  (`routingTiers`); the single-item case keeps the legacy scalar keys so an
+  older core stays compatible.
 
 ## 5. Errors and status
 
@@ -127,6 +130,9 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
 - Channel tests assert the cache/reset cycle (`value`, `listenable.value`,
   after `reset()` both null).
 - Test names are behaviour sentences; `group` carries the subject.
+- Logic wrapping a native read is tested through a nullable
+  `@visibleForTesting` provider override on the facade (see
+  `debugCapabilitiesJsonProvider`), never by loading the library.
 
 ## 8. Example app
 
