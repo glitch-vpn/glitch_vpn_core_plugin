@@ -1,10 +1,10 @@
 ### glitch_vpn_core
 
-* [Home](Home.md)
-* [Getting Started](Getting-Started.md)
-* [Bottlenecks](Bottlenecks.md)
-* [Benchmarks](Benchmarks.md)
-* [For Maintainers](For-Maintainers.md)
+* [Home](Home)
+* [Getting Started](Getting-Started)
+* [Bottlenecks](Bottlenecks)
+* [Benchmarks](Benchmarks)
+* [For Maintainers](For-Maintainers)
 
 ---
 

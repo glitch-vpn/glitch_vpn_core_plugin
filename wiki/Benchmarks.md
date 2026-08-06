@@ -20,7 +20,7 @@ Play Store delivery does that automatically; a bare APK does not.
 This is the number to attack if size matters: a build with fewer engines is
 much smaller (awg alone is 11.2 MB, xray alone 32.6 MB against 59.8 MB for all
 three). See [Engine
-Compositions](https://github.com/glitch-vpn/libglitchcore/blob/main/wiki/Engine-Compositions.md)
+Compositions](https://github.com/glitch-vpn/libglitchcore/wiki/Engine-Compositions)
 — it needs a custom core build and a pin change, not a plugin change.
 
 ## Memory and startup
@@ -43,7 +43,7 @@ Read them as an order of magnitude:
   real exit the round trip to that server dominates; this measures the
   library's own startup, which is what you can actually influence.
 * Windows 11, Go 1.26.4, full composition. Method and how to retake them:
-  [core Benchmarks](https://github.com/glitch-vpn/libglitchcore/blob/main/wiki/Benchmarks.md).
+  [core Benchmarks](https://github.com/glitch-vpn/libglitchcore/wiki/Benchmarks).
 
 ## Throughput
 

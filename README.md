@@ -26,12 +26,12 @@ relaunches over a live tunnel — all through the same call.
 
 ## Documentation
 
-* **[Getting Started](wiki/Getting-Started.md)** — install, connect, and the
+* **[Getting Started](https://github.com/glitch-vpn/glitch_vpn_core_plugin/wiki/Getting-Started)** — install, connect, and the
   platform setup each OS needs
-* **[Bottlenecks](wiki/Bottlenecks.md)** — limits and behaviour worth knowing
+* **[Bottlenecks](https://github.com/glitch-vpn/glitch_vpn_core_plugin/wiki/Bottlenecks)** — limits and behaviour worth knowing
   before you build a screen around it
-* **[Benchmarks](wiki/Benchmarks.md)** — app size, memory, startup
-* **[For Maintainers](wiki/For-Maintainers.md)** — working on the plugin itself
+* **[Benchmarks](https://github.com/glitch-vpn/glitch_vpn_core_plugin/wiki/Benchmarks)** — app size, memory, startup
+* **[For Maintainers](https://github.com/glitch-vpn/glitch_vpn_core_plugin/wiki/For-Maintainers)** — working on the plugin itself
 
 The app under `example/` exercises the whole API and doubles as a test client.
 
@@ -43,7 +43,7 @@ where a wrong rule is a leak rather than a bug report.
 
 `flutter test` needs no native library and runs anywhere; the example app is
 the fastest way to see a change work end to end. What we ask of a change is in
-[For Maintainers](wiki/For-Maintainers.md), including how we work with LLM
+[For Maintainers](https://github.com/glitch-vpn/glitch_vpn_core_plugin/wiki/For-Maintainers), including how we work with LLM
 assistance — openly, and held to the same gate as anything else.
 
 ## License

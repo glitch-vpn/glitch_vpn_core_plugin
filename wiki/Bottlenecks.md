@@ -2,7 +2,7 @@
 
 What the plugin does not do, and the behaviour that surprises people. Engine
 internals live in the [core's
-wiki](https://github.com/glitch-vpn/libglitchcore/blob/main/wiki/Bottlenecks.md);
+wiki](https://github.com/glitch-vpn/libglitchcore/wiki/Bottlenecks);
 this page is what matters from Dart.
 
 ## Platforms
