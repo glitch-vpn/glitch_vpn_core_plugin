@@ -228,6 +228,28 @@ void main() {
     expect(calls, 2);
   });
 
+  group('VpnNotificationTexts', () {
+    // The keys are read by NotificationTexts.fromMap on Android.
+    test('carries every text under the key the service reads', () {
+      const texts = VpnNotificationTexts(
+        title: 'T',
+        channel: 'C',
+        connecting: 'Ci',
+        connected: 'Cd',
+        disconnecting: 'Di',
+        disconnectAction: 'D',
+      );
+      expect(texts.toMap(), {
+        'title': 'T',
+        'channel': 'C',
+        'connecting': 'Ci',
+        'connected': 'Cd',
+        'disconnecting': 'Di',
+        'disconnectAction': 'D',
+      });
+    });
+  });
+
   group('CoreVersions', () {
     test('reads every engine the core reports', () {
       final v = CoreVersions.tryParse(

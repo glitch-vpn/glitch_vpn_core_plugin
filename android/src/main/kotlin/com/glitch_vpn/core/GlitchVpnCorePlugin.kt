@@ -43,16 +43,9 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         private val reqCode = AtomicInteger(40010)
 
-        @Volatile private var pendingAddresses: Array<String>? = null
-        @Volatile private var pendingDns: String? = null
-        @Volatile private var pendingMtu: Int? = null
-        @Volatile private var pendingSplitType: String? = null
-        @Volatile private var pendingSplitApps: Array<String>? = null
+        @Volatile private var pendingTunnel: TunnelRequest? = null
         @Volatile private var pendingResult: Result? = null
         @Volatile private var pendingPermissionOnlyResult: Result? = null
-
-        @Volatile private var disconnectNotifTitle: String? = null
-        @Volatile private var disconnectNotifSubtitle: String? = null
 
         /** Called from the service - forward to Dart on the UI thread. */
         fun notifyDisconnectPressed() {
@@ -159,16 +152,13 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 pendingPermissionOnlyResult = null
                 true
             } else if (requestCode == reqCode.get()) {
-                if (resultCode == Activity.RESULT_OK) {
-                    launchService(pendingAddresses, pendingDns, pendingMtu, pendingSplitType, pendingSplitApps, pendingResult)
+                val tunnel = pendingTunnel
+                if (resultCode == Activity.RESULT_OK && tunnel != null) {
+                    launchService(tunnel, pendingResult)
                 } else {
                     pendingResult?.error("DENIED", "User denied VPN permission", null)
                 }
-                pendingAddresses = null
-                pendingDns = null
-                pendingMtu = null
-                pendingSplitType = null
-                pendingSplitApps = null
+                pendingTunnel = null
                 pendingResult = null
                 true
             } else false
@@ -176,17 +166,15 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         binding.addRequestPermissionsResultListener { code, _, grantResults ->
             if (code == NOTIF_REQ_CODE) {
+                val tunnel = pendingTunnel
                 if (grantResults.isNotEmpty() &&
-                    grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                    tunnel != null
                 ) {
-                    startVpnService(pendingAddresses, pendingDns, pendingMtu, pendingSplitType, pendingSplitApps, pendingResult)
+                    startVpnService(tunnel, pendingResult)
                 } else {
                     pendingResult?.error("NOTIFICATIONS_DENIED", "User denied notifications permission", null)
-                    pendingAddresses = null
-                    pendingDns = null
-                    pendingMtu = null
-                    pendingSplitType = null
-                    pendingSplitApps = null
+                    pendingTunnel = null
                     pendingResult = null
                 }
                 true
@@ -205,14 +193,20 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getPlatformVersion" -> result.success("Android ${Build.VERSION.RELEASE}")
 
             "prepareTunnel" -> {
-                val addrList = call.argument<List<String>>("addresses")
-                val addrsArr = addrList?.toTypedArray()
-                val dns = call.argument<String>("dns")
-                val mtu = call.argument<Int>("mtu")
-                val splitType = call.argument<String>("splitType")
-                val splitApps = call.argument<List<String>>("splitApps")?.toTypedArray()
-                val started = startVpnService(addrsArr, dns, mtu, splitType, splitApps, result)
-                if (!started) return
+                val texts = NotificationTexts.fromMap(call.argument<Map<String, Any?>>("notification"))
+                if (texts == null) {
+                    result.error("NO_NOTIFICATION_TEXTS", "prepareTunnel needs the notification texts", null)
+                    return
+                }
+                val tunnel = TunnelRequest(
+                    addresses = call.argument<List<String>>("addresses")?.toTypedArray(),
+                    dns = call.argument<String>("dns"),
+                    mtu = call.argument<Int>("mtu"),
+                    splitType = call.argument<String>("splitType"),
+                    splitApps = call.argument<List<String>>("splitApps")?.toTypedArray(),
+                    texts = texts,
+                )
+                startVpnService(tunnel, result)
             }
 
             "stopTunnel" -> {
@@ -220,25 +214,20 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 result.success(true)
             }
 
-            "requestDisconnect" -> {
-                requestDisconnectFromService()
-                result.success(true)
-            }
-
             "updateNotification" -> {
-                val title = call.argument<String>("title")
-                val subtitle = call.argument<String>("subtitle")
-                val countryLine = call.argument<String>("countryLine")
-                val statsLine = call.argument<String>("statsLine")
-                val disconnectActionText = call.argument<String>("disconnectActionText")
-                val showDisconnect = call.argument<Boolean>("notifShowDisconnect")
-                pushNotificationUpdate(title, subtitle, countryLine, statsLine, disconnectActionText, showDisconnect)
+                pushNotificationUpdate(
+                    texts = NotificationTexts.fromMap(call.argument<Map<String, Any?>>("notification")),
+                    countryLine = call.argument<String>("countryLine"),
+                    connected = false,
+                )
                 result.success(true)
             }
 
-            "setDisconnectNotificationTexts" -> {
-                disconnectNotifTitle = call.argument<String>("title")
-                disconnectNotifSubtitle = call.argument<String>("subtitle")
+            "showNotificationPhase" -> {
+                when (call.argument<String>("phase")) {
+                    "connected" -> pushNotificationUpdate(texts = null, countryLine = null, connected = true)
+                    "disconnecting" -> if (tunnelUp()) sendServiceAction(GlitchVpnService.ACTION_DISCONNECTING)
+                }
                 result.success(true)
             }
 
@@ -365,67 +354,43 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         return true
     }
 
-    private fun startVpnService(
-        addresses: Array<String>?,
-        dns: String?,
-        mtu: Int?,
-        splitType: String?,
-        splitApps: Array<String>?,
-        result: Result?
-    ): Boolean {
+    private fun startVpnService(tunnel: TunnelRequest, result: Result?) {
         val ctx = appContext ?: run {
-            result?.error("NO_CONTEXT", "Application context missing", null); return false
+            result?.error("NO_CONTEXT", "Application context missing", null); return
         }
 
         if (!ensureNotificationPermission(result)) {
-            pendingAddresses = addresses
-            pendingDns = dns
-            pendingMtu = mtu
-            pendingSplitType = splitType
-            pendingSplitApps = splitApps
+            pendingTunnel = tunnel
             pendingResult = result
-            return false
+            return
         }
 
         val prepare = VpnService.prepare(ctx)
         if (prepare != null) {
             val act = activity ?: run {
-                result?.error("NO_ACTIVITY", "Activity not attached", null); return false
+                result?.error("NO_ACTIVITY", "Activity not attached", null); return
             }
-            pendingAddresses = addresses
-            pendingDns = dns
-            pendingMtu = mtu
-            pendingSplitType = splitType
-            pendingSplitApps = splitApps
+            pendingTunnel = tunnel
             pendingResult = result
             act.startActivityForResult(prepare, reqCode.get())
-            return false
+            return
         }
 
-        launchService(addresses, dns, mtu, splitType, splitApps, result)
-        return true
+        launchService(tunnel, result)
     }
 
-    private fun launchService(
-        addresses: Array<String>?,
-        dns: String?,
-        mtu: Int?,
-        splitType: String?,
-        splitApps: Array<String>?,
-        result: Result?
-    ) {
+    private fun launchService(tunnel: TunnelRequest, result: Result?) {
         val ctx = appContext ?: run {
             result?.error("NO_CONTEXT", "Application context missing", null); return
         }
 
         val svc = Intent(ctx, GlitchVpnService::class.java).apply {
-            if (addresses != null) putExtra(GlitchVpnService.EXTRA_ADDRESSES, addresses)
-            if (!dns.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_DNS, dns)
-            if (mtu != null) putExtra(GlitchVpnService.EXTRA_MTU, mtu)
-            if (!splitType.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_SPLIT_TYPE, splitType)
-            if (splitApps != null) putExtra(GlitchVpnService.EXTRA_SPLIT_APPS, splitApps)
-            putExtra(GlitchVpnService.EXTRA_NOTIF_TITLE, "Glitch VPN")
-            putExtra(GlitchVpnService.EXTRA_NOTIF_SUBTITLE, "Connecting…")
+            if (tunnel.addresses != null) putExtra(GlitchVpnService.EXTRA_ADDRESSES, tunnel.addresses)
+            if (!tunnel.dns.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_DNS, tunnel.dns)
+            if (tunnel.mtu != null) putExtra(GlitchVpnService.EXTRA_MTU, tunnel.mtu)
+            if (!tunnel.splitType.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_SPLIT_TYPE, tunnel.splitType)
+            if (tunnel.splitApps != null) putExtra(GlitchVpnService.EXTRA_SPLIT_APPS, tunnel.splitApps)
+            putExtra(GlitchVpnService.EXTRA_NOTIFICATION_TEXTS, tunnel.texts.toBundle())
         }
 
         val receiver = object : android.os.ResultReceiver(Handler(Looper.getMainLooper())) {
@@ -452,46 +417,39 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    private fun requestDisconnectFromService() {
+    private fun sendServiceAction(action: String) {
         val ctx = appContext ?: return
-        val i = Intent(ctx, GlitchVpnService::class.java).apply {
-            action = GlitchVpnService.ACTION_DISCONNECT
-            if (!disconnectNotifTitle.isNullOrBlank())
-                putExtra(GlitchVpnService.EXTRA_NOTIF_TITLE, disconnectNotifTitle)
-            if (!disconnectNotifSubtitle.isNullOrBlank())
-                putExtra(GlitchVpnService.EXTRA_NOTIF_SUBTITLE, disconnectNotifSubtitle)
-            if (!disconnectNotifSubtitle.isNullOrBlank())
-                putExtra(GlitchVpnService.EXTRA_COUNTRY_LINE, disconnectNotifSubtitle)
-        }
-        ctx.startService(i)
+        ctx.startService(Intent(ctx, GlitchVpnService::class.java).apply { this.action = action })
     }
 
-    private fun requestFinalizeFromService() {
-        val ctx = appContext ?: return
-        val i = Intent(ctx, GlitchVpnService::class.java).apply { action = GlitchVpnService.ACTION_FINALIZE }
-        ctx.startService(i)
-    }
+    private fun requestFinalizeFromService() = sendServiceAction(GlitchVpnService.ACTION_FINALIZE)
+
+    // Without a tunnel there is no notification, and an intent would only
+    // start a service that has nothing to show (or throw from the background).
+    private fun tunnelUp() = GlitchVpnService.tunFd >= 0
 
     private fun pushNotificationUpdate(
-        title: String?,
-        subtitle: String?,
+        texts: NotificationTexts?,
         countryLine: String?,
-        statsLine: String?,
-        disconnectActionText: String?,
-        showDisconnect: Boolean?
+        connected: Boolean,
     ) {
         val ctx = appContext ?: return
+        if (!tunnelUp()) return
         val i = Intent(ctx, GlitchVpnService::class.java).apply {
             action = GlitchVpnService.ACTION_UPDATE
-            if (title != null) putExtra(GlitchVpnService.EXTRA_NOTIF_TITLE, title)
-            if (subtitle != null) putExtra(GlitchVpnService.EXTRA_NOTIF_SUBTITLE, subtitle)
+            if (texts != null) putExtra(GlitchVpnService.EXTRA_NOTIFICATION_TEXTS, texts.toBundle())
             if (countryLine != null) putExtra(GlitchVpnService.EXTRA_COUNTRY_LINE, countryLine)
-            if (statsLine != null) putExtra(GlitchVpnService.EXTRA_STATS_LINE, statsLine)
-            if (disconnectActionText != null) putExtra(GlitchVpnService.EXTRA_DISCONNECT_TEXT, disconnectActionText)
-            if (showDisconnect != null) {
-                putExtra(GlitchVpnService.EXTRA_NOTIF_SHOW_DISCONNECT, showDisconnect)
-            }
+            if (connected) putExtra(GlitchVpnService.EXTRA_CONNECTED, true)
         }
         ctx.startService(i)
     }
 }
+
+private class TunnelRequest(
+    val addresses: Array<String>?,
+    val dns: String?,
+    val mtu: Int?,
+    val splitType: String?,
+    val splitApps: Array<String>?,
+    val texts: NotificationTexts,
+)

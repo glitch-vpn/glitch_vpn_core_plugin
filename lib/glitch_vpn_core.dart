@@ -24,8 +24,6 @@ class GlitchVpnCoreConfig {
   final int tunUdpTimeoutSeconds;
   final SplitTunnelingType splitTunnelingType;
   final List<String> splitTunnelingApps;
-  final String? disconnectNotificationTitle;
-  final String? disconnectNotificationSubtitle;
 
   const GlitchVpnCoreConfig({
     this.logLevel = 0,
@@ -34,8 +32,6 @@ class GlitchVpnCoreConfig {
     this.tunUdpTimeoutSeconds = defaultTunUdpTimeoutSeconds,
     this.splitTunnelingType = SplitTunnelingType.blacklist,
     this.splitTunnelingApps = const <String>[],
-    this.disconnectNotificationTitle,
-    this.disconnectNotificationSubtitle,
   });
 
   GlitchVpnCoreConfig copyWith({
@@ -45,8 +41,6 @@ class GlitchVpnCoreConfig {
     int? tunUdpTimeoutSeconds,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
-    String? disconnectNotificationTitle,
-    String? disconnectNotificationSubtitle,
   }) => GlitchVpnCoreConfig(
     logLevel: logLevel ?? this.logLevel,
     dnsAddress: dnsAddress ?? this.dnsAddress,
@@ -54,11 +48,39 @@ class GlitchVpnCoreConfig {
     tunUdpTimeoutSeconds: tunUdpTimeoutSeconds ?? this.tunUdpTimeoutSeconds,
     splitTunnelingType: splitTunnelingType ?? this.splitTunnelingType,
     splitTunnelingApps: splitTunnelingApps ?? this.splitTunnelingApps,
-    disconnectNotificationTitle:
-        disconnectNotificationTitle ?? this.disconnectNotificationTitle,
-    disconnectNotificationSubtitle:
-        disconnectNotificationSubtitle ?? this.disconnectNotificationSubtitle,
   );
+}
+
+/// The words of the Android tunnel notification, in the app's language: the
+/// plugin has none of its own. [channel] names the notification channel in
+/// the system's settings; [title] is also the session name the system's VPN
+/// settings show. [connected] stands as the line while no `countryLine` has
+/// been sent ([GlitchVpnCore.updateNotification]).
+class VpnNotificationTexts {
+  final String title;
+  final String channel;
+  final String connecting;
+  final String connected;
+  final String disconnecting;
+  final String disconnectAction;
+
+  const VpnNotificationTexts({
+    required this.title,
+    required this.channel,
+    required this.connecting,
+    required this.connected,
+    required this.disconnecting,
+    required this.disconnectAction,
+  });
+
+  Map<String, String> toMap() => {
+    'title': title,
+    'channel': channel,
+    'connecting': connecting,
+    'connected': connected,
+    'disconnecting': disconnecting,
+    'disconnectAction': disconnectAction,
+  };
 }
 
 enum VpnEngine { xray, awg, mihomo }
@@ -428,8 +450,6 @@ class GlitchVpnCore {
     int? tunUdpTimeoutSeconds,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
-    String? disconnectNotificationTitle,
-    String? disconnectNotificationSubtitle,
   }) {
     _config = _config.copyWith(
       logLevel: logLevel,
@@ -438,20 +458,7 @@ class GlitchVpnCore {
       tunUdpTimeoutSeconds: tunUdpTimeoutSeconds,
       splitTunnelingType: splitTunnelingType,
       splitTunnelingApps: splitTunnelingApps,
-      disconnectNotificationTitle: disconnectNotificationTitle,
-      disconnectNotificationSubtitle: disconnectNotificationSubtitle,
     );
-    if (disconnectNotificationTitle != null ||
-        disconnectNotificationSubtitle != null) {
-      final title =
-          disconnectNotificationTitle ?? _config.disconnectNotificationTitle;
-      final subtitle =
-          disconnectNotificationSubtitle ??
-          _config.disconnectNotificationSubtitle;
-      if (title != null && subtitle != null) {
-        _saveDisconnectNotificationTexts(title, subtitle);
-      }
-    }
   }
 
   static bool _handlerInstalled = false;
@@ -730,34 +737,26 @@ class GlitchVpnCore {
     } catch (_) {}
   }
 
+  /// Android only. A null argument keeps what the notification shows;
+  /// [texts] replaces the words [connect] was given (a change of language).
+  /// [countryLine] heads the connected notification, above the traffic
+  /// counter the plugin keeps itself.
   Future<void> updateNotification({
-    required String title,
-    required String subtitle,
+    VpnNotificationTexts? texts,
     String? countryLine,
-    String? statsLine,
-    String? disconnectActionText,
-    bool? showDisconnectAction,
   }) async {
     if (!Platform.isAndroid) return;
     await _ch.invokeMethod('updateNotification', {
-      'title': title,
-      'subtitle': subtitle,
+      'notification': ?texts?.toMap(),
       'countryLine': ?countryLine,
-      'statsLine': ?statsLine,
-      'disconnectActionText': ?disconnectActionText,
-      'notifShowDisconnect': ?showDisconnectAction,
     });
   }
 
-  static Future<void> _saveDisconnectNotificationTexts(
-    String title,
-    String subtitle,
-  ) async {
+  // Best-effort: the notification follows the session, it never decides it.
+  static Future<void> _showNotificationPhase(String phase) async {
+    if (!Platform.isAndroid) return;
     try {
-      await _ch.invokeMethod('setDisconnectNotificationTexts', {
-        'title': title,
-        'subtitle': subtitle,
-      });
+      await _ch.invokeMethod('showNotificationPhase', {'phase': phase});
     } catch (_) {}
   }
 
@@ -781,9 +780,12 @@ class GlitchVpnCore {
   ///   `NOTIFICATIONS_DENIED`, `TUN_ERROR`, ...); the status reason names it.
   /// - `XRAY_START_FAILED`, `AWG_START_FAILED`, `MIHOMO_START_FAILED`: the
   ///   core refused the start; the status reason is its result code.
+  ///
+  /// [notification] is shown on Android and ignored elsewhere.
   Future<void> connect({
     required VpnEngine engine,
     required String config,
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
@@ -885,6 +887,7 @@ class GlitchVpnCore {
         case VpnEngine.xray:
           await _connectXrayCore(
             config,
+            notification: notification,
             dnsAddress: dnsAddress,
             logLevel: logLevel,
             splitTunnelingType: splitTunnelingType,
@@ -912,6 +915,7 @@ class GlitchVpnCore {
         case VpnEngine.awg:
           await _connectAwgCore(
             config,
+            notification: notification,
             dnsAddress: dnsAddress,
             splitTunnelingType: splitTunnelingType,
             splitTunnelingApps: splitTunnelingApps,
@@ -927,6 +931,7 @@ class GlitchVpnCore {
         case VpnEngine.mihomo:
           await _connectMihomoCore(
             config,
+            notification: notification,
             dnsAddress: dnsAddress,
             logLevel: logLevel,
             splitTunnelingType: splitTunnelingType,
@@ -957,6 +962,7 @@ class GlitchVpnCore {
   /// tunnel on.
   Future<void> connectXray(
     String config, {
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
@@ -967,6 +973,7 @@ class GlitchVpnCore {
     await _withTransitionLock(() async {
       await _connectXrayCore(
         config,
+        notification: notification,
         dnsAddress: dnsAddress,
         logLevel: logLevel,
         splitTunnelingType: splitTunnelingType,
@@ -1029,6 +1036,7 @@ class GlitchVpnCore {
 
   Future<void> _connectXrayCore(
     String config, {
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
@@ -1072,6 +1080,7 @@ class GlitchVpnCore {
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
       fd = await _prepareTunnel({
+        'notification': notification.toMap(),
         'dns': effectiveDns,
         'mtu': effectiveTunMtu,
         'splitType': effectiveSplitType.name,
@@ -1147,6 +1156,7 @@ class GlitchVpnCore {
   /// tunnel on.
   Future<void> connectAwg(
     String config, {
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
@@ -1154,6 +1164,7 @@ class GlitchVpnCore {
     await _withTransitionLock(() async {
       await _connectAwgCore(
         config,
+        notification: notification,
         dnsAddress: dnsAddress,
         splitTunnelingType: splitTunnelingType,
         splitTunnelingApps: splitTunnelingApps,
@@ -1163,6 +1174,7 @@ class GlitchVpnCore {
 
   Future<void> _connectAwgCore(
     String config, {
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
@@ -1199,6 +1211,7 @@ class GlitchVpnCore {
     int fd = -1;
     if (Platform.isAndroid) {
       fd = await _prepareTunnel({
+        'notification': notification.toMap(),
         'addresses': [addr],
         'dns': awgDns,
         'splitType': effectiveSplitType.name,
@@ -1244,6 +1257,7 @@ class GlitchVpnCore {
 
   Future<void> _connectMihomoCore(
     String config, {
+    required VpnNotificationTexts notification,
     String? dnsAddress,
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
@@ -1282,6 +1296,7 @@ class GlitchVpnCore {
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
       fd = await _prepareTunnel({
+        'notification': notification.toMap(),
         'dns': effectiveDns,
         'mtu': _config.tunMtu,
         'splitType': effectiveSplitType.name,
@@ -1348,18 +1363,7 @@ class GlitchVpnCore {
         return;
       }
 
-      if (Platform.isAndroid) {
-        final t = _config.disconnectNotificationTitle ?? 'Disconnecting';
-        final s = _config.disconnectNotificationSubtitle ?? '';
-
-        try {
-          await updateNotification(
-            title: t,
-            subtitle: s,
-            showDisconnectAction: false,
-          );
-        } catch (_) {}
-      }
+      await _showNotificationPhase('disconnecting');
       VpnStatusChannel.instance.emit(VpnStatus.disconnecting);
 
       // `_activeTunnel` may be empty after UI restore.
@@ -1421,6 +1425,7 @@ class GlitchVpnCore {
       case GlitchVpnCoreFfiEventCode.engineConnected:
       case GlitchVpnCoreFfiEventCode.engineAlreadyRunning:
         VpnStatusChannel.instance.emit(VpnStatus.connected);
+        await _showNotificationPhase('connected');
         break;
 
       case GlitchVpnCoreFfiEventCode.engineConflictOtherCore:

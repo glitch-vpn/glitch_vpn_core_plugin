@@ -17,6 +17,15 @@ GlitchVpnCore.instance.onStatusChanged.listen((s) => print(s.status));
 await GlitchVpnCore.instance.connect(
   engine: VpnEngine.xray,
   config: 'vless://…',
+  // The Android notification's words, in your app's language.
+  notification: const VpnNotificationTexts(
+    title: 'My VPN',
+    channel: 'Connection status',
+    connecting: 'Connecting…',
+    connected: 'Connected',
+    disconnecting: 'Disconnecting…',
+    disconnectAction: 'Disconnect',
+  ),
 );
 ```
 

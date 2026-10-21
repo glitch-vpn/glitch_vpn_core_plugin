@@ -3,6 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glitch_vpn_core/glitch_vpn_core.dart';
 import 'package:glitch_vpn_core/vpn_status_channel.dart';
 
+const _texts = VpnNotificationTexts(
+  title: 'title',
+  channel: 'channel',
+  connecting: 'connecting',
+  connected: 'connected',
+  disconnecting: 'disconnecting',
+  disconnectAction: 'disconnect',
+);
+
 void main() {
   setUp(() {
     GlitchVpnCore.debugResetEngineIdsCache();
@@ -31,7 +40,11 @@ void main() {
     test('BUSY while a session is in progress, keeping its status', () async {
       VpnStatusChannel.instance.emit(VpnStatus.connecting);
       final e = await refusalOf(
-        (core) => core.connect(engine: VpnEngine.xray, config: 'x'),
+        (core) => core.connect(
+          engine: VpnEngine.xray,
+          config: 'x',
+          notification: _texts,
+        ),
       );
       expect(e.code, 'BUSY');
       expect(VpnStatusChannel.instance.value.status, VpnStatus.connecting);
@@ -39,7 +52,11 @@ void main() {
 
     test('ENGINE_NOT_IN_BUILD for an engine the build lacks', () async {
       final e = await refusalOf(
-        (core) => core.connect(engine: VpnEngine.mihomo, config: 'x'),
+        (core) => core.connect(
+          engine: VpnEngine.mihomo,
+          config: 'x',
+          notification: _texts,
+        ),
       );
       expect(e.code, 'ENGINE_NOT_IN_BUILD');
       expect(VpnStatusChannel.instance.value.status, VpnStatus.error);
@@ -51,6 +68,7 @@ void main() {
         (core) => core.connect(
           engine: VpnEngine.xray,
           config: 'x',
+          notification: _texts,
           balancerStrategy: 'url-test',
         ),
       );
@@ -62,6 +80,7 @@ void main() {
         (core) => core.connect(
           engine: VpnEngine.awg,
           config: 'x',
+          notification: _texts,
           domainStrategy: 'ipifnonmatch',
         ),
       );
@@ -73,6 +92,7 @@ void main() {
         (core) => core.connect(
           engine: VpnEngine.xray,
           config: 'x',
+          notification: _texts,
           geoAssetsDir: 'geo',
         ),
       );
@@ -81,8 +101,12 @@ void main() {
 
     test('PROXY_NOT_SUPPORTED for awg in proxy mode', () async {
       final e = await refusalOf(
-        (core) =>
-            core.connect(engine: VpnEngine.awg, config: 'x', proxyPort: 10808),
+        (core) => core.connect(
+          engine: VpnEngine.awg,
+          config: 'x',
+          notification: _texts,
+          proxyPort: 10808,
+        ),
       );
       expect(e.code, 'PROXY_NOT_SUPPORTED');
     });

@@ -28,17 +28,14 @@ class GlitchVpnService : VpnService() {
         const val ACTION_DISCONNECT = "com.glitch_vpn.core.ACTION_DISCONNECT"
         const val ACTION_FINALIZE   = "com.glitch_vpn.core.ACTION_FINALIZE"
         const val ACTION_UPDATE     = "com.glitch_vpn.core.ACTION_UPDATE"
+        const val ACTION_DISCONNECTING = "com.glitch_vpn.core.ACTION_DISCONNECTING"
 
         const val EXTRA_ADDRESSES = "addresses"
         const val EXTRA_ROUTES    = "routes"
         const val EXTRA_MTU       = "mtu"
-        const val EXTRA_SESSION   = "sessionName"
-        const val EXTRA_NOTIF_TITLE    = "notifTitle"
-        const val EXTRA_NOTIF_SUBTITLE = "notifSubtitle"
-        const val EXTRA_NOTIF_SHOW_DISCONNECT = "notifShowDisconnect"
+        const val EXTRA_NOTIFICATION_TEXTS = "notificationTexts"
+        const val EXTRA_CONNECTED = "connected"
         const val EXTRA_COUNTRY_LINE = "countryLine"
-        const val EXTRA_STATS_LINE = "statsLine"
-        const val EXTRA_DISCONNECT_TEXT = "disconnectActionText"
         const val EXTRA_DNS       = "dnsAddress"
         const val EXTRA_SPLIT_TYPE = "splitType"
         const val EXTRA_SPLIT_APPS = "splitApps"
@@ -80,10 +77,12 @@ class GlitchVpnService : VpnService() {
     private var keepAliveRunnable: Runnable? = null
     private var connectedSinceMs: Long = 0L
 
-    private var lastTitle: String = "Glitch VPN"
-    private var lastCountryLine: String = ""
-    private var lastStatsLine: String = ""
-    private var lastDisconnectText: String = "Disconnect"
+    private enum class Phase { CONNECTING, CONNECTED, DISCONNECTING }
+
+    private var phase = Phase.CONNECTING
+    private var texts: NotificationTexts? = null
+    private var countryLine: String = ""
+    private var statsLine: String = ""
     @Volatile private var disconnecting: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
@@ -107,15 +106,17 @@ class GlitchVpnService : VpnService() {
         }
 
         return when (action) {
-            ACTION_DISCONNECT -> handleActionDisconnect(intent)
+            ACTION_DISCONNECT -> handleActionDisconnect()
+            ACTION_DISCONNECTING -> handleActionDisconnecting()
             ACTION_FINALIZE   -> handleActionFinalize()
             ACTION_UPDATE     -> handleActionUpdate(intent)
             else              -> handleActionStart(intent)
         }
     }
 
-    private fun startAsForeground(title: String?, subtitle: String?): Int {
-        val n = buildNotification(title, subtitle ?: lastCountryLine.ifBlank { null })
+    private fun startAsForeground(): Int {
+        createNotificationChannel()
+        val n = buildNotification()
         return when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
                 // Android 14+: SPECIAL_USE is required for VPN services
@@ -131,22 +132,21 @@ class GlitchVpnService : VpnService() {
         }
     }
 
+    // Before the app has sent its texts, the app's own label stands in.
+    private fun appLabel(): String = applicationInfo.loadLabel(packageManager).toString()
+
+    // Creating an existing channel again renames it, so a change of language
+    // reaches the system's settings too.
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(NOTIF_CHANNEL_ID) == null) {
-            val ch = NotificationChannel(
-                NOTIF_CHANNEL_ID,
-                "Glitch VPN",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            nm.createNotificationChannel(ch)
-        }
+        val name = texts?.channel?.ifBlank { null } ?: appLabel()
+        nm.createNotificationChannel(
+            NotificationChannel(NOTIF_CHANNEL_ID, name, NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
-    // Mirrors the Dart _formatNotifStats humanizer so the notification looks the
-    // same whether the app is foreground or gone (Locale.US to keep a dot
-    // decimal separator regardless of device locale).
+    // Locale.US keeps a dot decimal separator regardless of device locale.
     private fun humanBytes(b: Long): String {
         if (b < 1024) return "$b B"
         val units = arrayOf("KB", "MB", "GB", "TB")
@@ -163,58 +163,60 @@ class GlitchVpnService : VpnService() {
     private fun formatStatsLine(rx: Long, tx: Long): String =
         "↓ ${humanBytes(rx)}   ↑ ${humanBytes(tx)}"
 
-    // Keeps the previous stats line on any error (JNI missing, core not yet up).
-    private fun refreshNativeStats() {
+    // Keeps the previous stats line on any error (JNI missing, core not yet
+    // up). True when the core reported a running engine.
+    private fun refreshNativeStats(): Boolean {
         try {
             val raw = nativeEngineTraffic()
-            if (raw.isBlank()) return
+            if (raw.isBlank()) return false
             val parts = raw.split(",")
-            if (parts.size != 2) return
-            val rx = parts[0].toLongOrNull() ?: return
-            val tx = parts[1].toLongOrNull() ?: return
-            lastStatsLine = formatStatsLine(rx, tx)
+            if (parts.size != 2) return false
+            val rx = parts[0].toLongOrNull() ?: return false
+            val tx = parts[1].toLongOrNull() ?: return false
+            statsLine = formatStatsLine(rx, tx)
+            return true
         } catch (_: Throwable) {
+            return false
         }
     }
 
+    private fun markConnected() {
+        if (phase != Phase.CONNECTING) return
+        phase = Phase.CONNECTED
+        connectedSinceMs = System.currentTimeMillis()
+    }
+
+    // A clock reading needs no words, so it reads the same in every language.
     private fun formatDuration(ms: Long): String {
-        val totalSeconds = (ms / 1000).toInt()
+        val totalSeconds = ms / 1000
         val hours = totalSeconds / 3600
         val minutes = (totalSeconds % 3600) / 60
         val seconds = totalSeconds % 60
-        return when {
-            hours > 0 -> "${hours}h ${minutes}m"
-            minutes > 0 -> "${minutes}m ${seconds}s"
-            else -> "${seconds}s"
+        return if (hours > 0) {
+            String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.US, "%02d:%02d", minutes, seconds)
         }
     }
 
-    private fun buildNotification(
-        title: String? = null,
-        countryLine: String? = null,
-        statsLine: String? = null,
-        showDisconnectAction: Boolean = true
-    ): Notification {
-        createNotificationChannel()
-
-        if (!title.isNullOrBlank()) lastTitle = title
-        if (!countryLine.isNullOrBlank()) lastCountryLine = countryLine
-        if (statsLine != null) lastStatsLine = statsLine
-
+    private fun buildNotification(): Notification {
+        val words = texts
         val lines = mutableListOf<String>()
-        if (lastCountryLine.isNotBlank()) lines.add(lastCountryLine)
-        if (lastStatsLine.isNotBlank()) lines.add(lastStatsLine)
-        if (connectedSinceMs > 0) {
-            val elapsed = System.currentTimeMillis() - connectedSinceMs
-            lines.add(formatDuration(elapsed))
+        val contentText = when (phase) {
+            Phase.CONNECTING -> words?.connecting.orEmpty()
+            Phase.DISCONNECTING -> words?.disconnecting.orEmpty()
+            Phase.CONNECTED -> {
+                if (countryLine.isNotBlank()) lines.add(countryLine)
+                if (statsLine.isNotBlank()) lines.add(statsLine)
+                if (connectedSinceMs > 0) {
+                    lines.add(formatDuration(System.currentTimeMillis() - connectedSinceMs))
+                }
+                countryLine.ifBlank { words?.connected.orEmpty() }
+            }
         }
         val bigText = lines.joinToString("\n")
-
-        val contentText = when {
-            lastCountryLine.isNotBlank() -> lastCountryLine
-            lines.isNotEmpty() -> lines.first()
-            else -> "Connected"
-        }
+        val disconnectAction = words?.disconnectAction.orEmpty()
+        val showDisconnectAction = phase != Phase.DISCONNECTING && disconnectAction.isNotBlank()
 
         val disconnectIntent = Intent(this, GlitchVpnService::class.java).apply {
             action = ACTION_DISCONNECT
@@ -233,7 +235,7 @@ class GlitchVpnService : VpnService() {
         }
 
         val builder = NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
-            .setContentTitle(lastTitle)
+            .setContentTitle(words?.title?.ifBlank { null } ?: appLabel())
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -246,7 +248,7 @@ class GlitchVpnService : VpnService() {
         if (showDisconnectAction) {
             builder.addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                lastDisconnectText,
+                disconnectAction,
                 disconnectPending
             )
         }
@@ -278,13 +280,14 @@ class GlitchVpnService : VpnService() {
     }
 
     private fun startKeepAliveUpdates() {
-        connectedSinceMs = System.currentTimeMillis()
         val handler = Handler(Looper.getMainLooper())
         keepAliveHandler = handler
         val runnable = object : Runnable {
             override fun run() {
                 try {
-                    refreshNativeStats()
+                    // A running engine is connected even when the Dart side
+                    // that would say so is gone.
+                    if (refreshNativeStats()) markConnected()
                     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     nm.notify(NOTIF_ID, buildNotification())
                 } catch (t: Throwable) {
@@ -305,17 +308,16 @@ class GlitchVpnService : VpnService() {
 
     private fun handleActionStart(intent: Intent?): Int {
         disconnecting = false
-        val title = intent?.getStringExtra(EXTRA_NOTIF_TITLE)
-        val subtitle = intent?.getStringExtra(EXTRA_NOTIF_SUBTITLE)
-        if (!title.isNullOrBlank()) lastTitle = title
-        val countryLine = intent?.getStringExtra(EXTRA_COUNTRY_LINE)
-        if (!countryLine.isNullOrBlank()) lastCountryLine = countryLine
-        val disconnectText = intent?.getStringExtra(EXTRA_DISCONNECT_TEXT)
-        if (!disconnectText.isNullOrBlank()) lastDisconnectText = disconnectText
-        startAsForeground(title ?: "Glitch VPN", subtitle ?: "Connecting…")
+        phase = Phase.CONNECTING
+        connectedSinceMs = 0L
+        countryLine = ""
+        statsLine = ""
+        texts = NotificationTexts.fromBundle(intent?.getBundleExtra(EXTRA_NOTIFICATION_TEXTS)) ?: texts
+        startAsForeground()
 
         val builder = Builder()
-        val sessionName = intent?.getStringExtra(EXTRA_SESSION) ?: "GlitchVPN"
+        // The system's VPN settings show the session name.
+        val sessionName = texts?.title?.ifBlank { null } ?: appLabel()
         val mtu = intent?.getIntExtra(EXTRA_MTU, 1420) ?: 1420
         
         val addresses = intent?.getStringArrayExtra(EXTRA_ADDRESSES) ?: arrayOf("10.0.0.2/32")
@@ -415,14 +417,35 @@ class GlitchVpnService : VpnService() {
         }
     }
 
-    private fun requestCoreDisconnect(intent: Intent?, source: String, safetyDelayMs: Long): Int {
-        Log.i(TAG, "$source received")
+    private fun showDisconnecting() {
         disconnecting = true
+        phase = Phase.DISCONNECTING
         stopKeepAliveUpdates()
-        val t = intent?.getStringExtra(EXTRA_NOTIF_TITLE)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val title = if (t.isNullOrBlank()) "Disconnecting" else t
-        nm.notify(NOTIF_ID, buildNotification(title, null, null, false))
+        nm.notify(NOTIF_ID, buildNotification())
+    }
+
+    // Dart's own disconnect: the engine stop is already under way there.
+    private fun handleActionDisconnecting(): Int {
+        if (finalized) return Service.START_NOT_STICKY
+        showDisconnecting()
+        finalizeIfStuck("ACTION_DISCONNECTING", 15_000)
+        return Service.START_STICKY
+    }
+
+    // Safety net: if ACTION_FINALIZE never arrives (race/crash), self-finalize.
+    private fun finalizeIfStuck(source: String, delayMs: Long) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (disconnecting && !finalized) {
+                Log.w(TAG, "Safety timeout: forcing finalize after $source")
+                handleActionFinalize()
+            }
+        }, delayMs)
+    }
+
+    private fun requestCoreDisconnect(source: String, safetyDelayMs: Long): Int {
+        Log.i(TAG, "$source received")
+        showDisconnecting()
         // Signal Dart/UI only - do not close the PFD here.
         GlitchVpnCorePlugin.notifyDisconnectPressed()
 
@@ -431,34 +454,28 @@ class GlitchVpnService : VpnService() {
         // engine then - it's heavy, blocks the main thread, and causes an ANR.
         if (!GlitchVpnCorePlugin.isUiAttached()) {
             Log.i(TAG, "UI detached -> starting headless disconnect")
-            startHeadlessDisconnect(intent)
+            startHeadlessDisconnect()
         } else {
             Log.i(TAG, "UI attached -> skipping headless disconnect to avoid ANR")
         }
 
-        // Safety net: if ACTION_FINALIZE never arrives (race/crash), self-finalize.
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (disconnecting && !finalized) {
-                Log.w(TAG, "Safety timeout: forcing finalize after $source")
-                handleActionFinalize()
-            }
-        }, safetyDelayMs)
+        finalizeIfStuck(source, safetyDelayMs)
 
         return Service.START_STICKY
     }
 
-    private fun handleActionDisconnect(intent: Intent?): Int {
-        return requestCoreDisconnect(intent, "ACTION_DISCONNECT", 15_000)
+    private fun handleActionDisconnect(): Int {
+        return requestCoreDisconnect("ACTION_DISCONNECT", 15_000)
     }
 
     override fun onRevoke() {
         Log.w(TAG, "VPN revoked by Android; requesting core disconnect")
         Handler(Looper.getMainLooper()).post {
-            requestCoreDisconnect(null, "onRevoke", 5_000)
+            requestCoreDisconnect("onRevoke", 5_000)
         }
     }
 
-    private fun startHeadlessDisconnect(intent: Intent?) {
+    private fun startHeadlessDisconnect() {
         if (headlessEngine != null) {
             Log.i(TAG, "Headless engine already running")
             return
@@ -471,13 +488,6 @@ class GlitchVpnService : VpnService() {
 
             val engine = FlutterEngine(appCtx)
             engine.plugins.add(GlitchVpnCorePlugin())
-
-            val maybeTitle = intent?.getStringExtra(EXTRA_NOTIF_TITLE)
-            val maybeSubtitle = intent?.getStringExtra(EXTRA_NOTIF_SUBTITLE)
-            if (!maybeTitle.isNullOrBlank() || !maybeSubtitle.isNullOrBlank()) {
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(NOTIF_ID, buildNotification(maybeTitle, maybeSubtitle ?: lastCountryLine.ifBlank { null }))
-            }
 
             val entrypoint = try {
                 // Newer API: (bundlePath, libraryUri, functionName)
@@ -517,17 +527,16 @@ class GlitchVpnService : VpnService() {
             return Service.START_NOT_STICKY
         }
 
-        val title = intent?.getStringExtra(EXTRA_NOTIF_TITLE)
-        val countryLine = intent?.getStringExtra(EXTRA_COUNTRY_LINE)
-            ?: intent?.getStringExtra(EXTRA_NOTIF_SUBTITLE) // backwards compat
-        val statsLine = intent?.getStringExtra(EXTRA_STATS_LINE)
-        val disconnectText = intent?.getStringExtra(EXTRA_DISCONNECT_TEXT)
-        val showDisconnect =
-            intent?.getBooleanExtra(EXTRA_NOTIF_SHOW_DISCONNECT, true) ?: true
+        val newTexts = NotificationTexts.fromBundle(intent?.getBundleExtra(EXTRA_NOTIFICATION_TEXTS))
+        if (newTexts != null) {
+            texts = newTexts
+            createNotificationChannel()
+        }
+        intent?.getStringExtra(EXTRA_COUNTRY_LINE)?.let { countryLine = it }
+        if (intent?.getBooleanExtra(EXTRA_CONNECTED, false) == true) markConnected()
 
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_ID, buildNotification(title, countryLine, statsLine, showDisconnect))
-        if (!disconnectText.isNullOrBlank()) lastDisconnectText = disconnectText
+        nm.notify(NOTIF_ID, buildNotification())
         return Service.START_STICKY
     }
 

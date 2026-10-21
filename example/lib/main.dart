@@ -44,6 +44,26 @@ Endpoint = 192.0.2.20:51820
 PersistentKeepalive = 25
 ''';
 
+// The app owns the notification's words; the plugin has none of its own.
+const _notificationTexts = VpnNotificationTexts(
+  title: 'Core Test',
+  channel: 'Tunnel status',
+  connecting: 'Connecting…',
+  connected: 'Connected',
+  disconnecting: 'Disconnecting…',
+  disconnectAction: 'Disconnect',
+);
+
+// A second language, to replace the words mid-session.
+const _notificationTextsDe = VpnNotificationTexts(
+  title: 'Core Test',
+  channel: 'Tunnelstatus',
+  connecting: 'Verbinden…',
+  connected: 'Verbunden',
+  disconnecting: 'Trennen…',
+  disconnectAction: 'Trennen',
+);
+
 class CoreTestApp extends StatelessWidget {
   const CoreTestApp({super.key});
 
@@ -114,6 +134,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
   StreamSubscription? _logSub;
   final List<VpnConnEvent> _conns = [];
   StreamSubscription? _connSub;
+  StreamSubscription? _serverSub;
+  bool _notificationGerman = false;
   bool _inspector = false;
   String _logFilter = '';
   bool _fileLog = false;
@@ -156,7 +178,35 @@ class _CoreTestPageState extends State<CoreTestPage> {
       });
     });
 
+    // The picked server heads the notification, as an app would show it.
+    _serverSub = GlitchVpnCore.instance.onServerSelectionChanged.listen((sel) {
+      final picked = sel.selected;
+      if (picked == null) return;
+      _updateNotification(countryLine: picked.displayName);
+    });
+
     await _refreshCapabilities();
+  }
+
+  Future<void> _updateNotification({
+    VpnNotificationTexts? texts,
+    String? countryLine,
+  }) async {
+    try {
+      await GlitchVpnCore.instance.updateNotification(
+        texts: texts,
+        countryLine: countryLine,
+      );
+    } on PlatformException catch (e) {
+      debugPrint('updateNotification: ${e.code}');
+    }
+  }
+
+  Future<void> _toggleNotificationLanguage() async {
+    setState(() => _notificationGerman = !_notificationGerman);
+    await _updateNotification(
+      texts: _notificationGerman ? _notificationTextsDe : _notificationTexts,
+    );
   }
 
   Future<void> _ensureNotificationPermission() async {
@@ -246,6 +296,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
       await GlitchVpnCore.instance.connect(
         engine: _engine,
         config: _configCtrl.text.trim(),
+        notification: _notificationGerman
+            ? _notificationTextsDe
+            : _notificationTexts,
         balancerStrategy: _balancerStrategy,
         routing: _engine == VpnEngine.awg ? null : routing,
         dns: dns,
@@ -327,6 +380,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   void dispose() {
     _logSub?.cancel();
     _connSub?.cancel();
+    _serverSub?.cancel();
     _configCtrl.dispose();
     _directRulesCtrl.dispose();
     _proxyRulesCtrl.dispose();
@@ -458,6 +512,13 @@ class _CoreTestPageState extends State<CoreTestPage> {
             Text(
               upd.reason!,
               style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          if (Platform.isAndroid)
+            TextButton(
+              onPressed: _toggleNotificationLanguage,
+              child: Text(
+                'Notification texts: ${_notificationGerman ? 'German' : 'English'}',
+              ),
             ),
           if (_connectRefusal != null)
             SelectableText(

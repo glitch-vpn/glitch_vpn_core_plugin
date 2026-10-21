@@ -27,9 +27,20 @@ core.onStatsChanged.listen((s) => print('${s.downloadBytes}/${s.uploadBytes}'));
 core.onServerSelectionChanged.listen((s) => print('via ${s.selected?.displayName}'));
 core.onExternalIpChanged.listen((ip) => print('${ip.ipv4} / ${ip.ipv6}'));
 
+// The Android notification's words, in your app's language.
+const texts = VpnNotificationTexts(
+  title: 'My VPN',
+  channel: 'Connection status',
+  connecting: 'Connecting…',
+  connected: 'Connected',
+  disconnecting: 'Disconnecting…',
+  disconnectAction: 'Disconnect',
+);
+
 await core.connect(
   engine: VpnEngine.xray,
   config: 'vless://…',                     // a share link; awg takes INI or awg://
+  notification: texts,
   routing: const VpnRouting(
     tiers: [
       VpnRoutingTier(
@@ -94,9 +105,11 @@ Geo matchers need geoip.dat/geosite.dat — you supply them, see below.
 
 **Android.** The plugin runs the tunnel in a foreground service with a live
 notification and can disconnect from it headlessly. Ask for the notification
-permission (`requestNotificationPermission`) and set the notification texts via
-`configure`. The whole app package is excluded from the VPN, so in-app HTTP
-does not traverse the tunnel — this is why the exit IP is resolved core-side.
+permission (`requestNotificationPermission`). The notification's words are the
+app's: `connect(notification: VpnNotificationTexts(...))` carries them, and
+`updateNotification` changes them or the line under the title mid-session.
+The whole app package is excluded from the VPN, so in-app HTTP does not
+traverse the tunnel — this is why the exit IP is resolved core-side.
 
 **Windows.** TUN mode needs elevation. `ensureAdmin()` first looks for the
 `GlitchVpnCore` system service that the core release ships: with it installed,
@@ -121,6 +134,7 @@ the engine at the directory:
 await core.connect(
   engine: VpnEngine.xray,
   config: link,
+  notification: texts,
   geoAssetsDir: r'C:\ProgramData\myapp\geo',   // absolute path
 );
 ```
