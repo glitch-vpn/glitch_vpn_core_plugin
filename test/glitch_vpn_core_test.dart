@@ -6,7 +6,7 @@ import 'package:glitch_vpn_core/vpn_conn_channel.dart';
 
 void main() {
   group('VpnRouting.toOpts', () {
-    test('single tier rides the legacy keys byte-identically', () {
+    test('a single tier goes out as a one-element routingTiers', () {
       final opts = const VpnRouting(
         mode: 'direct-all',
         tiers: [
@@ -20,26 +20,45 @@ void main() {
         disableIPv6: true,
         disableUDP: true,
       ).toOpts();
-      expect(opts, {
-        'routingMode': 'direct-all',
-        'proxyRules': 'geosite:youtube,domain:x.com',
-        'directRules': 'geoip:ru',
-        'localNetworksDirect': '1',
-        'disableIPv6': '1',
-        'disableUDP': '1',
+      expect(opts.keys, {
+        'routingMode',
+        'routingTiers',
+        'localNetworksDirect',
+        'disableIPv6',
+        'disableUDP',
       });
+      expect(opts['routingMode'], 'direct-all');
+      expect(jsonDecode(opts['routingTiers']!), [
+        {
+          'direct': ['geoip:ru'],
+          'proxy': ['geosite:youtube', 'domain:x.com'],
+        },
+      ]);
+      expect(opts['localNetworksDirect'], '1');
+      expect(opts['disableIPv6'], '1');
+      expect(opts['disableUDP'], '1');
     });
 
-    test('two tiers emit routingTiers JSON, no legacy keys', () {
+    test('a matcher holding a comma stays one matcher', () {
+      final opts = const VpnRouting(
+        tiers: [
+          VpnRoutingTier(block: [r'regexp:^ad[0-9]{2,5}\.example$']),
+        ],
+      ).toOpts();
+      expect(jsonDecode(opts['routingTiers']!), [
+        {
+          'block': [r'regexp:^ad[0-9]{2,5}\.example$'],
+        },
+      ]);
+    });
+
+    test('two tiers emit routingTiers JSON', () {
       final opts = const VpnRouting(
         tiers: [
           VpnRoutingTier(proxy: [' domain:vk.ru ']),
           VpnRoutingTier(direct: ['domain:ru'], block: ['geosite:ads']),
         ],
       ).toOpts();
-      expect(opts.containsKey('proxyRules'), isFalse);
-      expect(opts.containsKey('directRules'), isFalse);
-      expect(opts.containsKey('blockRules'), isFalse);
       expect(jsonDecode(opts['routingTiers']!), [
         {
           'proxy': ['domain:vk.ru'],
@@ -52,14 +71,18 @@ void main() {
     });
 
     test('empty tiers are dropped', () {
-      // [tier, empty tier] collapses to one tier → legacy keys.
       final opts = const VpnRouting(
         tiers: [
           VpnRoutingTier(direct: ['geoip:ru']),
           VpnRoutingTier(block: [' ', '']),
         ],
       ).toOpts();
-      expect(opts, {'directRules': 'geoip:ru'});
+      expect(opts.keys, {'routingTiers'});
+      expect(jsonDecode(opts['routingTiers']!), [
+        {
+          'direct': ['geoip:ru'],
+        },
+      ]);
 
       // All empty → no rule keys, flags still emitted.
       final empty = const VpnRouting(

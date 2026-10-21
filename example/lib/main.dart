@@ -187,6 +187,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
   List<String> _csv(String s) =>
       s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
+  // Rule fields take one matcher per line: a regexp may hold a comma.
+  List<String> _lines(String s) =>
+      s.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
   // One `name=ip1,ip2` entry per line; `=` because keys carry `:` prefixes.
   Map<String, List<String>> _hosts(String s) {
     final out = <String, List<String>>{};
@@ -214,15 +218,15 @@ class _CoreTestPageState extends State<CoreTestPage> {
         mode: _routingMode,
         tiers: [
           VpnRoutingTier(
-            block: _csv(_blockRulesCtrl.text),
-            direct: _csv(_directRulesCtrl.text),
-            proxy: _csv(_proxyRulesCtrl.text),
+            block: _lines(_blockRulesCtrl.text),
+            direct: _lines(_directRulesCtrl.text),
+            proxy: _lines(_proxyRulesCtrl.text),
           ),
           for (final t in _extraTiers)
             VpnRoutingTier(
-              block: _csv(t.block.text),
-              direct: _csv(t.direct.text),
-              proxy: _csv(t.proxy.text),
+              block: _lines(t.block.text),
+              direct: _lines(t.direct.text),
+              proxy: _lines(t.proxy.text),
             ),
         ],
         localNetworksDirect: _localNetworksDirect,
@@ -779,7 +783,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
           const Padding(
             padding: EdgeInsets.only(top: 6),
             child: Text(
-              'Rules: one matcher per comma. Prefix sets the type - '
+              'Rules: one matcher per line. Prefix sets the type - '
               'geoip:cn · geosite:category-ru · domain:youtube.com · domain:рф · '
               'full:x · keyword:x · regexp:x · process:App.exe · 1.2.3.4 · '
               '10.0.0.0/8 · ::/0. domain: covers the zone and its subdomains '
@@ -796,20 +800,21 @@ class _CoreTestPageState extends State<CoreTestPage> {
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             ),
           ),
-          _geoField(
+          _ruleField(
             'direct (bypass VPN)',
             _directRulesCtrl,
-            'domain:gov.ru, geoip:ru',
+            'domain:gov.ru\ngeoip:ru',
           ),
-          _geoField(
+          _ruleField(
             'proxy (force via VPN)',
             _proxyRulesCtrl,
-            'domain:youtube.com, geosite:youtube',
+            'domain:youtube.com\ngeosite:youtube',
           ),
-          _geoField(
+          _ruleField(
             'block (drop)',
             _blockRulesCtrl,
-            'domain:ads.example, geosite:category-ads-all',
+            r'regexp:^ad[0-9]{2,5}\.example$'
+                '\ngeosite:category-ads-all',
           ),
           for (var i = 0; i < _extraTiers.length; i++)
             Card(
@@ -840,9 +845,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
                         ),
                       ],
                     ),
-                    _geoField('direct', _extraTiers[i].direct, 'domain:ru'),
-                    _geoField('proxy', _extraTiers[i].proxy, 'domain:vk.ru'),
-                    _geoField('block', _extraTiers[i].block, 'geosite:ads'),
+                    _ruleField('direct', _extraTiers[i].direct, 'domain:ru'),
+                    _ruleField('proxy', _extraTiers[i].proxy, 'domain:vk.ru'),
+                    _ruleField('block', _extraTiers[i].block, 'geosite:ads'),
                   ],
                 ),
               ),
@@ -1067,15 +1072,18 @@ class _CoreTestPageState extends State<CoreTestPage> {
     final entry = 'process:$proc';
     final cur = target.text.trim();
     setState(() {
-      target.text = cur.isEmpty ? entry : '$cur, $entry';
+      target.text = cur.isEmpty ? entry : '$cur\n$entry';
     });
   }
+
+  Widget _ruleField(String label, TextEditingController c, String hint) =>
+      _geoField(label, c, hint, maxLines: null);
 
   Widget _geoField(
     String label,
     TextEditingController c,
     String hint, {
-    int maxLines = 1,
+    int? maxLines = 1,
   }) => Padding(
     padding: const EdgeInsets.only(top: 6),
     child: TextField(

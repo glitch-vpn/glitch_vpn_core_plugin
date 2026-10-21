@@ -100,8 +100,8 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
   `VpnStatus.error` with a readable reason (see the `balancerStrategy` and
   engine-availability checks).
 - Structured payloads inside the string opts map are JSON-encoded strings
-  (`routingTiers`); the single-item case keeps the legacy scalar keys so an
-  older core stays compatible.
+  (`routingTiers`), a single item included: a list never travels
+  comma-joined, since a value may hold a comma.
 
 ## 5. Errors and status
 

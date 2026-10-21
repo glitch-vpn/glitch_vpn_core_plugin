@@ -142,13 +142,7 @@ class VpnRouting {
         .toList();
 
     if (mode.isNotEmpty) opts['routingMode'] = mode;
-    if (cleaned.length == 1) {
-      // Single tier rides the legacy keys, so an older core keeps working.
-      final t = cleaned.first;
-      if (t.proxy.isNotEmpty) opts['proxyRules'] = t.proxy.join(',');
-      if (t.direct.isNotEmpty) opts['directRules'] = t.direct.join(',');
-      if (t.block.isNotEmpty) opts['blockRules'] = t.block.join(',');
-    } else if (cleaned.length > 1) {
+    if (cleaned.isNotEmpty) {
       opts['routingTiers'] = jsonEncode([
         for (final t in cleaned)
           {
@@ -1047,11 +1041,9 @@ class GlitchVpnCore {
     if (balancerStrategy.isNotEmpty) {
       opts['balancerStrategy'] = balancerStrategy;
     }
-    // Legacy alias: bypassCountries → direct geoip:<cc>, unless routing already
-    // supplied direct rules (flat or tiered).
-    if (bypassCountries.isNotEmpty &&
-        !opts.containsKey('directRules') &&
-        !opts.containsKey('routingTiers')) {
+    // Legacy alias: bypassCountries → direct geoip:<cc>; the core ignores it
+    // once routingTiers is set.
+    if (bypassCountries.isNotEmpty && !opts.containsKey('routingTiers')) {
       opts['bypassCountries'] = bypassCountries;
     }
     // connect() already trimmed and validated both.
