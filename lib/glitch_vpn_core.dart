@@ -116,8 +116,9 @@ class VpnRoutingTier {
   });
 }
 
-/// Routing for xray/mihomo. Tiers are evaluated in list order, first match
-/// wins across the whole sequence; then LAN bypass and the mode catch-all.
+/// Routing for xray/mihomo; awg reads [disableIPv6] alone. Tiers are
+/// evaluated in list order, first match wins across the whole sequence; then
+/// LAN bypass and the mode catch-all.
 /// `process:` rules are the exception wherever the desktop tun2socks bridge
 /// owns the per-process split: there they keep the global priority
 /// block > direct > proxy regardless of tier order.
@@ -131,7 +132,10 @@ class VpnRouting {
   /// RFC1918/CGNAT/loopback → direct.
   final bool localNetworksDirect;
 
-  /// Reject ::/0 and suppress AAAA.
+  /// xray/mihomo: reject ::/0 and suppress AAAA. On Android, for every
+  /// engine, it also keeps IPv6 out of the tunnel, where Android then blocks
+  /// it; off, IPv6 is tunnelled. Elsewhere awg only skips the IPv6 lookup of
+  /// the external IP.
   final bool disableIPv6;
 
   /// Reject UDP except :53.
@@ -669,25 +673,80 @@ class GlitchVpnCore {
     }
   }
 
-  static String _extractWgAddress(String config) {
-    final lines = config.split('\n');
-    var inInterface = false;
-    for (final raw in lines) {
-      final line = raw.trim();
+  /// The `[Interface]` addresses of a WireGuard config (an INI or one
+  /// `awg://` link), v4 and v6 in order, and whether any `[Peer]` takes IPv6
+  /// in its `AllowedIPs`. A pool of links yields nothing: the core picks the
+  /// link only once the tunnel exists.
+  @visibleForTesting
+  static ({List<String> addresses, bool peersCarryV6}) debugWgInterface(
+    String config,
+  ) {
+    final ini = _wgIni(config);
+    final addresses = <String>[];
+    var peersCarryV6 = false;
+    var section = '';
+    for (final raw in ini.split('\n')) {
+      final line = raw.split('#').first.trim();
       if (line.startsWith('[')) {
-        inInterface = line.toLowerCase().contains('interface');
+        section = line.toLowerCase();
         continue;
       }
-      if (!inInterface) continue;
-      if (line.toLowerCase().startsWith('address')) {
-        final idx = line.indexOf('=');
-        if (idx == -1) continue;
-        var val = line.substring(idx + 1).trim();
-        val = val.split(RegExp('[, ;]')).first.trim();
-        if (val.isNotEmpty) return val;
+      final idx = line.indexOf('=');
+      if (idx == -1) continue;
+      final key = line.substring(0, idx).trim().toLowerCase();
+      final values = line
+          .substring(idx + 1)
+          .split(RegExp('[, ;]'))
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty);
+      if (section == '[interface]' && key == 'address') {
+        addresses.addAll(values);
+      } else if (section == '[peer]' && key == 'allowedips') {
+        if (values.any((v) => v.contains(':'))) peersCarryV6 = true;
       }
     }
-    return '10.0.0.2/32';
+    return (addresses: addresses, peersCarryV6: peersCarryV6);
+  }
+
+  // awg://<base64url(INI)>[#name], the core's share-link form; anything else
+  // is read as an INI.
+  static String _wgIni(String config) {
+    final link = config.trim();
+    if (!link.startsWith('awg://') || link.contains('\n')) return config;
+    final payload = link.substring('awg://'.length).split('#').first.trim();
+    try {
+      return utf8.decode(base64Url.decode(base64Url.normalize(payload)));
+    } on FormatException {
+      return '';
+    }
+  }
+
+  // The TUN's own addresses for the engines that terminate it in user space
+  // (xray's tun2socks, mihomo's stack): any private pair works. The v6 one
+  // is clear of xray's fake-ip pool (fc00::/18).
+  static const _tunAddressV4 = '10.0.0.2/32';
+  static const _tunAddressV6 = 'fdfe:dcba:9876::2/128';
+
+  /// The TUN's addresses and routes on Android. IPv6 is routed into the
+  /// tunnel when the tunnel has a v6 address and [disableIPv6] is off;
+  /// otherwise Android blocks it, so it never leaks around the tunnel.
+  @visibleForTesting
+  static ({List<String> addresses, List<String> routes}) debugTunnelFamilies(
+    List<String> addresses, {
+    required bool disableIPv6,
+  }) {
+    bool isV6(String a) => a.contains(':');
+    final kept = [
+      for (final a in addresses)
+        if (!disableIPv6 || !isV6(a)) a,
+    ];
+    return (
+      addresses: kept,
+      routes: [
+        if (kept.any((a) => !isV6(a))) '0.0.0.0/0',
+        if (kept.any(isV6)) '::/0',
+      ],
+    );
   }
 
   static String _extractWgDns(String config) {
@@ -768,8 +827,9 @@ class GlitchVpnCore {
   /// The exception's message is the status reason, word for word:
   /// - `ENGINE_NOT_IN_BUILD`, `UNSUPPORTED_STRATEGY` ([balancerStrategiesFor]),
   ///   `UNSUPPORTED_DOMAIN_STRATEGY` ([domainStrategiesFor]),
-  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`):
-  ///   refused before anything starts.
+  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`),
+  ///   `NO_TUNNEL_ADDRESS` (Android: an awg config with only IPv6 addresses
+  ///   and IPv6 off): refused before anything starts.
   /// - `ELEVATION_REQUIRED`: Windows without admin rights; [ensureAdmin] may
   ///   already be relaunching the app elevated.
   /// - `PREPARE_TUNNEL_FAILED`: Android gave no TUN fd.
@@ -916,6 +976,7 @@ class GlitchVpnCore {
           await _connectAwgCore(
             config,
             notification: notification,
+            disableIPv6: routing?.disableIPv6 ?? false,
             dnsAddress: dnsAddress,
             splitTunnelingType: splitTunnelingType,
             splitTunnelingApps: splitTunnelingApps,
@@ -1079,8 +1140,14 @@ class GlitchVpnCore {
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
+      final tunnel = debugTunnelFamilies(const [
+        _tunAddressV4,
+        _tunAddressV6,
+      ], disableIPv6: routing?.disableIPv6 ?? false);
       fd = await _prepareTunnel({
         'notification': notification.toMap(),
+        'addresses': tunnel.addresses,
+        'routes': tunnel.routes,
         'dns': effectiveDns,
         'mtu': effectiveTunMtu,
         'splitType': effectiveSplitType.name,
@@ -1160,11 +1227,13 @@ class GlitchVpnCore {
     String? dnsAddress,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
+    VpnRouting? routing,
   }) async {
     await _withTransitionLock(() async {
       await _connectAwgCore(
         config,
         notification: notification,
+        disableIPv6: routing?.disableIPv6 ?? false,
         dnsAddress: dnsAddress,
         splitTunnelingType: splitTunnelingType,
         splitTunnelingApps: splitTunnelingApps,
@@ -1175,6 +1244,7 @@ class GlitchVpnCore {
   Future<void> _connectAwgCore(
     String config, {
     required VpnNotificationTexts notification,
+    bool disableIPv6 = false,
     String? dnsAddress,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
@@ -1204,21 +1274,36 @@ class GlitchVpnCore {
     if (awgDns.isEmpty) awgDns = _extractWgDns(config);
     if (awgDns.isEmpty) awgDns = effectiveDns;
 
+    // A v6 address no peer routes would only turn IPv6's instant refusal
+    // into a timeout.
+    final wg = debugWgInterface(config);
+    final tunnel = debugTunnelFamilies(
+      wg.addresses.isEmpty ? const [_tunAddressV4] : wg.addresses,
+      disableIPv6: disableIPv6 || !wg.peersCarryV6,
+    );
+    if (Platform.isAndroid && tunnel.addresses.isEmpty) {
+      throw _refuse(
+        'NO_TUNNEL_ADDRESS',
+        'awg config has only IPv6 addresses and IPv6 is off',
+      );
+    }
+
     VpnStatusChannel.instance.emit(VpnStatus.connecting);
     _resetSessionChannels();
 
-    String addr = _extractWgAddress(config);
     int fd = -1;
     if (Platform.isAndroid) {
       fd = await _prepareTunnel({
         'notification': notification.toMap(),
-        'addresses': [addr],
+        'addresses': tunnel.addresses,
+        'routes': tunnel.routes,
         'dns': awgDns,
         'splitType': effectiveSplitType.name,
         'splitApps': effectiveSplitApps,
       });
     }
     final awgOpts = <String, String>{
+      if (disableIPv6) 'disableIPv6': '1',
       if (balancerStrategy.isNotEmpty) 'balancerStrategy': balancerStrategy,
       if (probeUrl.trim().isNotEmpty) 'probeUrl': probeUrl.trim(),
       if (livenessIntervalSec != null)
@@ -1295,8 +1380,14 @@ class GlitchVpnCore {
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
+      final tunnel = debugTunnelFamilies(const [
+        _tunAddressV4,
+        _tunAddressV6,
+      ], disableIPv6: routing?.disableIPv6 ?? false);
       fd = await _prepareTunnel({
         'notification': notification.toMap(),
+        'addresses': tunnel.addresses,
+        'routes': tunnel.routes,
         'dns': effectiveDns,
         'mtu': _config.tunMtu,
         'splitType': effectiveSplitType.name,

@@ -371,22 +371,19 @@ class GlitchVpnService : VpnService() {
             }
         }
         
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                builder.allowFamily(android.system.OsConstants.AF_INET)
-                // builder.allowFamily(android.system.OsConstants.AF_INET6) // if IPv6 needed
-            }
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to allowFamily: ${e.message}")
-        }
-
+        // A family with no route here is blocked by Android; allowFamily
+        // would let it bypass the tunnel instead.
         for (addr in addresses) {
-            val p = addr.split("/")
-            if (p.size == 2) try { builder.addAddress(p[0], p[1].toIntOrNull() ?: 32) } catch (_: Throwable) {}
+            val (ip, prefix) = splitCidr(addr) ?: continue
+            try { builder.addAddress(ip, prefix) } catch (e: Throwable) {
+                Log.e(TAG, "addAddress $addr failed: ${e.message}")
+            }
         }
         for (route in routes) {
-            val p = route.split("/")
-            if (p.size == 2) try { builder.addRoute(p[0], p[1].toIntOrNull() ?: 0) } catch (_: Throwable) {}
+            val (ip, prefix) = splitCidr(route) ?: continue
+            try { builder.addRoute(ip, prefix) } catch (e: Throwable) {
+                Log.e(TAG, "addRoute $route failed: ${e.message}")
+            }
         }
 
         return try {
@@ -441,6 +438,14 @@ class GlitchVpnService : VpnService() {
                 handleActionFinalize()
             }
         }, delayMs)
+    }
+
+    // "ip/prefix", or a bare ip read as a single host.
+    private fun splitCidr(cidr: String): Pair<String, Int>? {
+        val parts = cidr.trim().split("/")
+        val ip = parts[0].ifBlank { return null }
+        val prefix = parts.getOrNull(1)?.toIntOrNull() ?: if (ip.contains(':')) 128 else 32
+        return ip to prefix
     }
 
     private fun requestCoreDisconnect(source: String, safetyDelayMs: Long): Int {

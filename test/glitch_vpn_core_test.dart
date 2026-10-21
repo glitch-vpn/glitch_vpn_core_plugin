@@ -228,6 +228,83 @@ void main() {
     expect(calls, 2);
   });
 
+  group('Android tunnel families', () {
+    test('every Address of the interface, both families, in order', () {
+      const ini = '''
+[Interface]
+PrivateKey = k
+Address = 10.10.0.2/32, fd10::2/128 # home
+Address=10.10.1.2/32
+[Peer]
+Address = 192.0.2.1/32
+AllowedIPs = 0.0.0.0/0, ::/0
+''';
+      final wg = GlitchVpnCore.debugWgInterface(ini);
+      expect(wg.addresses, ['10.10.0.2/32', 'fd10::2/128', '10.10.1.2/32']);
+      expect(wg.peersCarryV6, isTrue);
+    });
+
+    test('peers without an IPv6 AllowedIPs carry no IPv6', () {
+      const ini = '''
+[Interface]
+Address = 10.10.0.2/32, fd10::2/128
+[Peer]
+AllowedIPs = 0.0.0.0/0
+''';
+      expect(GlitchVpnCore.debugWgInterface(ini).peersCarryV6, isFalse);
+    });
+
+    test('an awg:// link is read as the INI it carries', () {
+      final wg = GlitchVpnCore.debugWgInterface(
+        'awg://W0ludGVyZmFjZV0KUHJpdmF0ZUtleSA9IGsKQWRkcmVzcyA9IDEwLjIwLjAuMi8zMiwgZmQyMDo6Mi8xMjgKW1BlZXJdCkFsbG93ZWRJUHMgPSAwLjAuMC4wLzAsIDo6LzAK#home',
+      );
+      expect(wg.addresses, ['10.20.0.2/32', 'fd20::2/128']);
+      expect(wg.peersCarryV6, isTrue);
+    });
+
+    test('a pool of links, garbage or no interface yields no address', () {
+      expect(
+        GlitchVpnCore.debugWgInterface('awg://AAAA\nawg://BBBB').addresses,
+        isEmpty,
+      );
+      expect(GlitchVpnCore.debugWgInterface('awg://%%').addresses, isEmpty);
+      expect(GlitchVpnCore.debugWgInterface('not a config').addresses, isEmpty);
+    });
+
+    test('a v6-only config with IPv6 off keeps no address', () {
+      final t = GlitchVpnCore.debugTunnelFamilies([
+        'fd10::2/128',
+      ], disableIPv6: true);
+      expect(t.addresses, isEmpty);
+      expect(t.routes, isEmpty);
+    });
+
+    test('a v6 address routes ::/0 into the tunnel', () {
+      final t = GlitchVpnCore.debugTunnelFamilies([
+        '10.0.0.2/32',
+        'fd00::2/128',
+      ], disableIPv6: false);
+      expect(t.addresses, ['10.0.0.2/32', 'fd00::2/128']);
+      expect(t.routes, ['0.0.0.0/0', '::/0']);
+    });
+
+    test('disableIPv6 drops the v6 address and its route', () {
+      final t = GlitchVpnCore.debugTunnelFamilies([
+        '10.0.0.2/32',
+        'fd00::2/128',
+      ], disableIPv6: true);
+      expect(t.addresses, ['10.0.0.2/32']);
+      expect(t.routes, ['0.0.0.0/0']);
+    });
+
+    test('a v4-only tunnel routes no v6', () {
+      final t = GlitchVpnCore.debugTunnelFamilies([
+        '10.0.0.2/32',
+      ], disableIPv6: false);
+      expect(t.routes, ['0.0.0.0/0']);
+    });
+  });
+
   group('VpnNotificationTexts', () {
     // The keys are read by NotificationTexts.fromMap on Android.
     test('carries every text under the key the service reads', () {

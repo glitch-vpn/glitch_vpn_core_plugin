@@ -95,9 +95,12 @@ routing: const VpnRouting(
 Matchers: `geoip:cn`, `geosite:category-ads-all`, `domain:example.com` (the
 zone and its subdomains), `full:exact.host`, `keyword:str`, `regexp:expr`,
 `process:App.exe`, or a bare IP/CIDR. Plus `localNetworksDirect`,
-`disableIPv6` and `disableUDP` as switches above every tier. A country that
-should bypass the tunnel is a `geoip:<cc>` entry in a tier's `direct` list;
-there is no separate country option.
+`disableIPv6` and `disableUDP` as switches above every tier. On Android, IPv6
+goes through the tunnel unless `disableIPv6` is set, and is then blocked rather
+than let past it. awg reads only this switch of the routing, and it changes
+the tunnel only on Android. A country that should bypass the tunnel is a
+`geoip:<cc>` entry in a tier's `direct` list; there is no separate country
+option.
 
 Geo matchers need geoip.dat/geosite.dat — you supply them, see below.
 

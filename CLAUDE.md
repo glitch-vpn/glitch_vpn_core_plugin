@@ -94,7 +94,8 @@ wiki/                         # user-facing docs (GitHub wiki page names);
   the core **replays** connected + 302 + 303 + stats when the status port is
   registered — `initialize()` is all an app needs to restore state.
 - Proxy mode (`proxyPort`) has no TUN and no elevation; awg rejects it.
-- awg ignores routing/DNS config apart from one plain resolver; validate
+- awg ignores routing apart from `disableIPv6`, and DNS apart from one
+  plain resolver; validate
   `balancerStrategy`/`fingerprint`/`domainStrategy` via
   `balancerStrategiesFor` / `fingerprintsFor` / `domainStrategiesFor` before
   connecting.

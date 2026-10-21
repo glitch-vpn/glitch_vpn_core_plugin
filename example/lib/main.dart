@@ -300,7 +300,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
             ? _notificationTextsDe
             : _notificationTexts,
         balancerStrategy: _balancerStrategy,
-        routing: _engine == VpnEngine.awg ? null : routing,
+        routing: routing,
         dns: dns,
         geoAssetsDir: _geoAssetsDirCtrl.text.trim(),
         domainStrategy: _domainStrategy,
@@ -432,7 +432,16 @@ class _CoreTestPageState extends State<CoreTestPage> {
               const SizedBox(height: 12),
               _configCard(),
               const SizedBox(height: 12),
-              if (_engine != VpnEngine.awg) _routingCard(),
+              if (_engine != VpnEngine.awg)
+                _routingCard()
+              else
+                Card(
+                  child: CheckboxListTile(
+                    value: _disableIPv6,
+                    onChanged: (v) => setState(() => _disableIPv6 = v ?? false),
+                    title: const Text('no IPv6'),
+                  ),
+                ),
               const SizedBox(height: 12),
               _dnsCard(),
               const SizedBox(height: 12),

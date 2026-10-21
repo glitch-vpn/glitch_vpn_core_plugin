@@ -200,6 +200,7 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 val tunnel = TunnelRequest(
                     addresses = call.argument<List<String>>("addresses")?.toTypedArray(),
+                    routes = call.argument<List<String>>("routes")?.toTypedArray(),
                     dns = call.argument<String>("dns"),
                     mtu = call.argument<Int>("mtu"),
                     splitType = call.argument<String>("splitType"),
@@ -386,6 +387,7 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         val svc = Intent(ctx, GlitchVpnService::class.java).apply {
             if (tunnel.addresses != null) putExtra(GlitchVpnService.EXTRA_ADDRESSES, tunnel.addresses)
+            if (tunnel.routes != null) putExtra(GlitchVpnService.EXTRA_ROUTES, tunnel.routes)
             if (!tunnel.dns.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_DNS, tunnel.dns)
             if (tunnel.mtu != null) putExtra(GlitchVpnService.EXTRA_MTU, tunnel.mtu)
             if (!tunnel.splitType.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_SPLIT_TYPE, tunnel.splitType)
@@ -447,6 +449,7 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
 private class TunnelRequest(
     val addresses: Array<String>?,
+    val routes: Array<String>?,
     val dns: String?,
     val mtu: Int?,
     val splitType: String?,
