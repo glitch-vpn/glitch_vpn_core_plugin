@@ -168,10 +168,14 @@ await core.connect(
 );
 ```
 
-Empty falls back to the engine default, which exists on desktop (beside the
-core binary) but not on Android. With geo rules and no usable files the connect
-fails loudly — nothing is downloaded behind your back. `pickDirectory()` opens
-a folder picker on Windows if you want the user to choose.
+The directory is also mihomo's home for the session, where it keeps its
+`cache.db`, so the engine has to be able to write there. Empty falls back to
+the engine default: the directory of the core binary on Windows, and on
+Android a private directory of the app's that holds no geo files. Linux has no
+default, so mihomo there needs the path on every connect. With geo rules and no
+usable files the connect fails loudly — nothing is downloaded behind your back.
+`pickDirectory()` opens a folder picker on Windows if you want the user to
+choose.
 
 ## What else is there
 

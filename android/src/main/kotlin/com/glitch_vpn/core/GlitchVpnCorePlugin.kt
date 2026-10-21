@@ -201,6 +201,14 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         when (call.method) {
             "getPlatformVersion" -> result.success("Android ${Build.VERSION.RELEASE}")
 
+            // Private, never pruned, and left out of backups: mihomo keeps its
+            // cache.db here, state that belongs to this install only.
+            "engineHomeDir" -> {
+                val ctx = appContext ?: run { result.success(null); return }
+                val dir = File(ctx.noBackupFilesDir, "glitch_vpn_core")
+                result.success(if (dir.isDirectory || dir.mkdirs()) dir.absolutePath else null)
+            }
+
             "prepareTunnel" -> {
                 val texts = NotificationTexts.fromMap(call.argument<Map<String, Any?>>("notification"))
                 if (texts == null) {

@@ -115,6 +115,9 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
   `PlatformException(code: 'UPPER_SNAKE')` when the caller must see it.
 - Platform-channel calls that are best-effort (notifications, pickers) wrap
   in `try {} catch (_) {}` — a missing platform impl must not break connect.
+- A platform default the core needs (Android's engine home) is set once in
+  `initialize()`, after the FFI initializes, from a best-effort channel call;
+  with no answer, the core's own refusal names what is missing.
 - Status transitions are only emitted through `VpnStatusChannel.instance` —
   no direct notifier writes.
 

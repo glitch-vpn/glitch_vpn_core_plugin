@@ -36,7 +36,11 @@ Nothing is bundled and nothing is downloaded, by design — the plugin used to
 own a downloader and no longer does.
 
 * Empty `geoAssetsDir` falls back to the engine default: beside the core binary
-  on desktop, **nothing on Android**. Geo rules on Android need the path.
+  on Windows, a private directory with **no geo files on Android**, nothing on
+  Linux. Geo rules on Android need the path; mihomo on Linux needs it on every
+  connect, geo rules or not, because the directory is its home.
+* mihomo writes `cache.db` into the directory, so it must be writable by the
+  account the engine runs as.
 * A path that is not absolute *for the running platform* is rejected before
   dispatch, because the core would ignore it and quietly keep the default.
 * mihomo validates a .dat by loading its `cn` list; a trimmed file that xray

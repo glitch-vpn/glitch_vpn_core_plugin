@@ -102,6 +102,9 @@ wiki/                         # user-facing docs (GitHub wiki page names);
 - Geo assets are the app's responsibility: `connect(geoAssetsDir:)` points the
   engine at a caller-owned dir with geoip.dat/geosite.dat; the plugin neither
   downloads nor caches them, and `initialize()` performs no network I/O.
+  The same dir is mihomo's home (it writes `cache.db`), and mihomo refuses a
+  start without one; on Android `initialize()` sets `xray.location.asset` to a
+  private no-backup dir so a connect without `geoAssetsDir` still has a home.
 - Android `prepareTunnel` returns a TUN fd; the whole app package is excluded
   from the VPN (`addDisallowedApplication`), so in-app HTTP does **not**
   traverse the tunnel — external-IP resolution happens core-side for this

@@ -649,6 +649,7 @@ class GlitchVpnCore {
         );
       }
       await GlitchVpnCoreFfi.instance.initialize();
+      if (Platform.isAndroid) await _setAndroidEngineHome();
       _ffiReady = true;
     }
 
@@ -672,6 +673,19 @@ class GlitchVpnCore {
         VpnStatusChannel.instance.emit(VpnStatus.disconnected);
       }
     } catch (_) {}
+  }
+
+  // Android has no directory the core could default to, and mihomo refuses a
+  // start without a writable home. A connect's geoAssetsDir still wins: the
+  // core swaps it in for that session and puts this one back after. With no
+  // answer here, the core's own refusal says what is missing.
+  static Future<void> _setAndroidEngineHome() async {
+    String? dir;
+    try {
+      dir = await _ch.invokeMethod<String>('engineHomeDir');
+    } catch (_) {}
+    if (dir == null) return;
+    GlitchVpnCoreFfi.instance.setEnvVar('xray.location.asset', dir);
   }
 
   static bool isRunning() =>
@@ -961,10 +975,10 @@ class GlitchVpnCore {
     String balancerStrategy = '',
     VpnRouting? routing,
     VpnDns? dns,
-    // Absolute dir with geoip.dat/geosite.dat; xray/mihomo only. Empty falls
-    // back to the engine default, which exists on desktop (beside the core
-    // binary) but not on Android — geo rules there need this set. Failure
-    // modes are in the README.
+    // Absolute dir with geoip.dat/geosite.dat; xray/mihomo only, and mihomo's
+    // home for the session. Empty falls back to the engine default: beside the
+    // core binary on Windows, a private directory with no geo files on
+    // Android, none on Linux. Failure modes are in the wiki's Bottlenecks.
     String geoAssetsDir = '',
     // xray only: one of [domainStrategiesFor]; empty → engine default (asis).
     // Non-asis leaks lookups to the direct outbound under fake-ip — README.
