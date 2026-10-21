@@ -46,6 +46,17 @@ Several links in one `config` (newline-separated) make a balancer pool; pick a
 strategy with `balancerStrategy` and let `onServerSelectionChanged` tell the UI
 which server won.
 
+`connect()` throws a `PlatformException` when the start is refused, and its
+`code` says why; the method lists them all. `BUSY` leaves the session in
+progress and its status alone. Every other refusal also sets `onStatusChanged`
+to error: for the plugin's own checks (`ENGINE_NOT_IN_BUILD`,
+`UNSUPPORTED_STRATEGY`, `ELEVATION_REQUIRED`, ...) the status reason is the
+exception's message; for Android's codes (`DENIED`, ...) and the engines'
+`*_START_FAILED` the exception keeps its source's message, and the status
+names the platform's code or the core's result. A start the core accepts can still fail afterwards — a bad link,
+missing geo files, a failed handshake — and that failure arrives on
+`onStatusChanged` only.
+
 `initialize()` does no network I/O and no work you have to sequence around. It
 also restores state: called over a tunnel that is still up — after a hot
 restart, an app relaunch, or against the Windows service — it replays the

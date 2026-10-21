@@ -692,8 +692,30 @@ class GlitchVpnCore {
     return '';
   }
 
-  static Future<int?> _prepareTunnelInternal(Map<String, Object?> args) =>
-      _ch.invokeMethod<int>('prepareTunnel', args);
+  /// The TUN fd. A refusal leaves the status at error, not connecting, so the
+  /// next [connect] is not refused as busy; the platform's code passes through.
+  static Future<int> _prepareTunnel(Map<String, Object?> args) async {
+    final int? fd;
+    try {
+      fd = await _ch.invokeMethod<int>('prepareTunnel', args);
+    } on PlatformException catch (e) {
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: 'prepareTunnel error: ${e.code}',
+      );
+      rethrow;
+    } on Object catch (e) {
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: 'prepareTunnel error: ${e.runtimeType}',
+      );
+      rethrow;
+    }
+    if (fd == null || fd == -1) {
+      throw _refuse('PREPARE_TUNNEL_FAILED', 'prepareTunnel failed');
+    }
+    return fd;
+  }
 
   static Future<void> stopTunnel() => _ch.invokeMethod('stopTunnel');
   static Future<void> _stopTunnelSilently() async {
@@ -735,6 +757,26 @@ class GlitchVpnCore {
     } catch (_) {}
   }
 
+  /// Throws [PlatformException] when the start is refused, and every refusal
+  /// but `BUSY` also sets [onStatusChanged] to error. A start the core accepts
+  /// and that fails afterwards (a bad link, missing geo files, a failed
+  /// handshake) does not throw: it arrives on [onStatusChanged] only.
+  ///
+  /// The exception's message is the status reason, word for word:
+  /// - `ENGINE_NOT_IN_BUILD`, `UNSUPPORTED_STRATEGY` ([balancerStrategiesFor]),
+  ///   `UNSUPPORTED_DOMAIN_STRATEGY` ([domainStrategiesFor]),
+  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`):
+  ///   refused before anything starts.
+  /// - `ELEVATION_REQUIRED`: Windows without admin rights; [ensureAdmin] may
+  ///   already be relaunching the app elevated.
+  /// - `PREPARE_TUNNEL_FAILED`: Android gave no TUN fd.
+  ///
+  /// The exception carries its source's own message:
+  /// - `BUSY`: a session is connecting or connected and keeps its status.
+  /// - Android's code from preparing the tunnel (`DENIED`,
+  ///   `NOTIFICATIONS_DENIED`, `TUN_ERROR`, ...); the status reason names it.
+  /// - `XRAY_START_FAILED`, `AWG_START_FAILED`, `MIHOMO_START_FAILED`: the
+  ///   core refused the start; the status reason is its result code.
   Future<void> connect({
     required VpnEngine engine,
     required String config,
@@ -785,38 +827,36 @@ class GlitchVpnCore {
         // Let listeners react to the forced disconnected state.
         await Future.delayed(const Duration(milliseconds: 100));
       } else if (currentStatus != VpnStatus.disconnected) {
-        return;
+        // No status: the session in progress keeps its own.
+        throw PlatformException(
+          code: 'BUSY',
+          message: 'connect() while ${currentStatus.name}',
+        );
       }
 
       final engines = await engineIds();
       if (engines.isNotEmpty && !engines.contains(engine.name)) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason:
-              'Engine "${engine.name}" is not in this build (available: ${engines.join(', ')})',
+        throw _refuse(
+          'ENGINE_NOT_IN_BUILD',
+          'Engine "${engine.name}" is not in this build (available: ${engines.join(', ')})',
         );
-        return;
       }
 
       if (balancerStrategy.isNotEmpty &&
           !balancerStrategiesFor(engine).contains(balancerStrategy)) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason:
-              'Balancer "$balancerStrategy" not supported by ${engine.name}',
+        throw _refuse(
+          'UNSUPPORTED_STRATEGY',
+          'Balancer "$balancerStrategy" not supported by ${engine.name}',
         );
-        return;
       }
 
       final effectiveDomainStrategy = domainStrategy.trim();
       if (effectiveDomainStrategy.isNotEmpty &&
           !domainStrategiesFor(engine).contains(effectiveDomainStrategy)) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason:
-              'domainStrategy "$domainStrategy" not supported by ${engine.name}',
+        throw _refuse(
+          'UNSUPPORTED_DOMAIN_STRATEGY',
+          'domainStrategy "$domainStrategy" not supported by ${engine.name}',
         );
-        return;
       }
 
       // The engine may run in the service process whose working directory the
@@ -825,19 +865,14 @@ class GlitchVpnCore {
       final effectiveGeoAssetsDir = geoAssetsDir.trim();
       if (effectiveGeoAssetsDir.isNotEmpty &&
           !debugIsAbsolutePath(effectiveGeoAssetsDir)) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'geoAssetsDir "$geoAssetsDir" must be an absolute path',
+        throw _refuse(
+          'RELATIVE_GEO_PATH',
+          'geoAssetsDir "$geoAssetsDir" must be an absolute path',
         );
-        return;
       }
 
       if (proxyPort != null && engine == VpnEngine.awg) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'awg has no proxy mode (use TUN)',
-        );
-        return;
+        throw _refuse('PROXY_NOT_SUPPORTED', 'awg has no proxy mode (use TUN)');
       }
 
       _activeProxyUser = '';
@@ -915,6 +950,9 @@ class GlitchVpnCore {
     });
   }
 
+  /// Skips [connect]'s checks. Throws `ELEVATION_REQUIRED` on Windows without
+  /// admin rights, and otherwise the codes [connect] lists from preparing the
+  /// tunnel on.
   Future<void> connectXray(
     String config, {
     String? dnsAddress,
@@ -937,6 +975,31 @@ class GlitchVpnCore {
         routing: routing,
       );
     });
+  }
+
+  static PlatformException _refuse(String code, String reason) {
+    VpnStatusChannel.instance.emit(VpnStatus.error, reason: reason);
+    return PlatformException(code: code, message: reason);
+  }
+
+  // ensureAdmin() returning false may mean a UAC relaunch is under way and
+  // this process is about to exit; the caller decides whether to say so.
+  static PlatformException _refuseNotElevated() =>
+      _refuse('ELEVATION_REQUIRED', 'Admin rights are required');
+
+  // A throw after the connecting status must not leave it there: the next
+  // connect() would read it as busy. Only the type goes into the reason, since
+  // an FFI error may quote what it was handed.
+  static T _withErrorStatus<T>(String step, T Function() call) {
+    try {
+      return call();
+    } on Object catch (e) {
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: '$step failed: ${e.runtimeType}',
+      );
+      rethrow;
+    }
   }
 
   // Listeners must not show the previous session's data while a new tunnel
@@ -994,14 +1057,7 @@ class GlitchVpnCore {
     // Proxy mode exposes a loopback SOCKS - no TUN, so no admin/prepareTunnel.
     final proxyMode = proxyPort != null;
     if (!proxyMode) {
-      final elevated = await ensureAdmin();
-      if (!elevated) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'Admin rights are required',
-        );
-        return;
-      }
+      if (!await ensureAdmin()) throw _refuseNotElevated();
     }
 
     final effectiveDns = (dnsAddress ?? _config.dnsAddress).trim();
@@ -1016,25 +1072,19 @@ class GlitchVpnCore {
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
-      fd =
-          await _prepareTunnelInternal({
-            'dns': effectiveDns,
-            'mtu': effectiveTunMtu,
-            'splitType': effectiveSplitType.name,
-            'splitApps': effectiveSplitApps,
-          }) ??
-          -1;
-      if (fd == -1) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'prepareTunnel failed',
-        );
-        throw PlatformException(code: 'PREPARE_TUNNEL_FAILED');
-      }
+      fd = await _prepareTunnel({
+        'dns': effectiveDns,
+        'mtu': effectiveTunMtu,
+        'splitType': effectiveSplitType.name,
+        'splitApps': effectiveSplitApps,
+      });
     }
-    GlitchVpnCoreFfi.instance.setTun2SocksConfig(
-      mtu: effectiveTunMtu,
-      udpTimeoutSeconds: effectiveTunUdpTimeoutSeconds,
+    _withErrorStatus(
+      'SetTun2SocksConfig',
+      () => GlitchVpnCoreFfi.instance.setTun2SocksConfig(
+        mtu: effectiveTunMtu,
+        udpTimeoutSeconds: effectiveTunUdpTimeoutSeconds,
+      ),
     );
 
     final opts = <String, String>{...?routing?.toOpts()};
@@ -1072,14 +1122,17 @@ class GlitchVpnCore {
       ipv6EchoUrl: ipv6EchoUrl,
     );
 
-    final res = GlitchVpnCoreFfi.instance.engineStart(
-      'xray',
-      config: config,
-      tunFd: fd,
-      dns: effectiveDns,
-      logLevel: effectiveLog,
-      opts: opts,
-      dnsConfig: dns?.toJson(),
+    final res = _withErrorStatus(
+      'EngineStart',
+      () => GlitchVpnCoreFfi.instance.engineStart(
+        'xray',
+        config: config,
+        tunFd: fd,
+        dns: effectiveDns,
+        logLevel: effectiveLog,
+        opts: opts,
+        dnsConfig: dns?.toJson(),
+      ),
     );
     if (res == 0) {
       _activeTunnel = 'xray';
@@ -1095,6 +1148,9 @@ class GlitchVpnCore {
     }
   }
 
+  /// Skips [connect]'s checks. Throws `ELEVATION_REQUIRED` on Windows without
+  /// admin rights, and otherwise the codes [connect] lists from preparing the
+  /// tunnel on.
   Future<void> connectAwg(
     String config, {
     String? dnsAddress,
@@ -1125,14 +1181,7 @@ class GlitchVpnCore {
     String ipv6EchoUrl = '',
   }) async {
     await initialize();
-    final elevated = await ensureAdmin();
-    if (!elevated) {
-      VpnStatusChannel.instance.emit(
-        VpnStatus.error,
-        reason: 'Admin rights are required',
-      );
-      return;
-    }
+    if (!await ensureAdmin()) throw _refuseNotElevated();
 
     final effectiveDns = (dnsAddress ?? _config.dnsAddress).trim();
     final effectiveSplitType = splitTunnelingType ?? _config.splitTunnelingType;
@@ -1155,36 +1204,12 @@ class GlitchVpnCore {
     String addr = _extractWgAddress(config);
     int fd = -1;
     if (Platform.isAndroid) {
-      try {
-        fd =
-            await _prepareTunnelInternal({
-              'addresses': [addr],
-              'dns': awgDns,
-              'splitType': effectiveSplitType.name,
-              'splitApps': effectiveSplitApps,
-            }) ??
-            -1;
-      } on PlatformException catch (e) {
-        if (e.code == 'NEEDS_PERMISSION') {
-          VpnStatusChannel.instance.emit(
-            VpnStatus.error,
-            reason: 'NEEDS_PERMISSION',
-          );
-          throw PlatformException(code: 'NEEDS_PERMISSION');
-        }
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'prepareTunnel error: ${e.code}',
-        );
-        rethrow;
-      }
-      if (fd == -1) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'prepareTunnel failed',
-        );
-        throw PlatformException(code: 'PREPARE_TUNNEL_FAILED');
-      }
+      fd = await _prepareTunnel({
+        'addresses': [addr],
+        'dns': awgDns,
+        'splitType': effectiveSplitType.name,
+        'splitApps': effectiveSplitApps,
+      });
     }
     final awgOpts = <String, String>{
       if (balancerStrategy.isNotEmpty) 'balancerStrategy': balancerStrategy,
@@ -1198,13 +1223,16 @@ class GlitchVpnCore {
       ipv4EchoUrl: ipv4EchoUrl,
       ipv6EchoUrl: ipv6EchoUrl,
     );
-    final res = GlitchVpnCoreFfi.instance.engineStart(
-      'awg',
-      config: config,
-      tunFd: fd,
-      dns: awgDns,
-      logLevel: _config.logLevel,
-      opts: awgOpts,
+    final res = _withErrorStatus(
+      'EngineStart',
+      () => GlitchVpnCoreFfi.instance.engineStart(
+        'awg',
+        config: config,
+        tunFd: fd,
+        dns: awgDns,
+        logLevel: _config.logLevel,
+        opts: awgOpts,
+      ),
     );
     if (res == 0) {
       _activeTunnel = 'awg';
@@ -1246,14 +1274,7 @@ class GlitchVpnCore {
     // Proxy mode exposes a loopback mixed inbound - no TUN, so no admin/prepareTunnel.
     final proxyMode = proxyPort != null;
     if (!proxyMode) {
-      final elevated = await ensureAdmin();
-      if (!elevated) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'Admin rights are required',
-        );
-        return;
-      }
+      if (!await ensureAdmin()) throw _refuseNotElevated();
     }
 
     final effectiveDns = (dnsAddress ?? _config.dnsAddress).trim();
@@ -1266,21 +1287,12 @@ class GlitchVpnCore {
 
     int fd = -1;
     if (Platform.isAndroid && !proxyMode) {
-      fd =
-          await _prepareTunnelInternal({
-            'dns': effectiveDns,
-            'mtu': _config.tunMtu,
-            'splitType': effectiveSplitType.name,
-            'splitApps': effectiveSplitApps,
-          }) ??
-          -1;
-      if (fd == -1) {
-        VpnStatusChannel.instance.emit(
-          VpnStatus.error,
-          reason: 'prepareTunnel failed',
-        );
-        throw PlatformException(code: 'PREPARE_TUNNEL_FAILED');
-      }
+      fd = await _prepareTunnel({
+        'dns': effectiveDns,
+        'mtu': _config.tunMtu,
+        'splitType': effectiveSplitType.name,
+        'splitApps': effectiveSplitApps,
+      });
     }
 
     final opts = <String, String>{...?routing?.toOpts()};
@@ -1310,14 +1322,17 @@ class GlitchVpnCore {
       ipv6EchoUrl: ipv6EchoUrl,
     );
 
-    final res = GlitchVpnCoreFfi.instance.engineStart(
-      'mihomo',
-      config: config,
-      tunFd: fd,
-      dns: effectiveDns,
-      logLevel: effectiveLog,
-      opts: opts,
-      dnsConfig: dns?.toJson(),
+    final res = _withErrorStatus(
+      'EngineStart',
+      () => GlitchVpnCoreFfi.instance.engineStart(
+        'mihomo',
+        config: config,
+        tunFd: fd,
+        dns: effectiveDns,
+        logLevel: effectiveLog,
+        opts: opts,
+        dnsConfig: dns?.toJson(),
+      ),
     );
     if (res == 0) {
       _activeTunnel = 'mihomo';

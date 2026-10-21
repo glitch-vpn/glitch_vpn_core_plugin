@@ -96,9 +96,10 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
   else.
 - A shared helper (`_applyIpResolveOpts` style) owns any opt group that all
   three engine paths need — three inline copies is how they diverge.
-- Validation that saves a doomed connect happens before dispatch and emits
-  `VpnStatus.error` with a readable reason (see the `balancerStrategy` and
-  engine-availability checks).
+- Validation that saves a doomed connect happens before dispatch and throws
+  `_refuse(code, reason)`: the reason goes out as `VpnStatus.error`, the code
+  to the caller. A failure after the core accepts the start reaches the
+  caller only as a status.
 - Structured payloads inside the string opts map are JSON-encoded strings
   (`routingTiers`), a single item included: a list never travels
   comma-joined, since a value may hold a comma.

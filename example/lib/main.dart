@@ -118,6 +118,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
   String _logFilter = '';
   bool _fileLog = false;
 
+  String? _connectRefusal;
+
   bool _pinging = false;
   List<PingResult>? _pingResults;
 
@@ -216,6 +218,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
       await _refreshCapabilities();
       return;
     }
+    setState(() => _connectRefusal = null);
     try {
       final routing = VpnRouting(
         mode: _routingMode,
@@ -274,7 +277,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
       );
       await _refreshCapabilities();
     } on PlatformException catch (e) {
-      debugPrint('Connect failed: ${e.code} ${e.message}');
+      if (mounted) {
+        setState(() => _connectRefusal = '${e.code}: ${e.message ?? ''}');
+      }
     }
   }
 
@@ -448,6 +453,15 @@ class _CoreTestPageState extends State<CoreTestPage> {
             Text(
               upd.reason!,
               style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          if (_connectRefusal != null)
+            SelectableText(
+              'connect() threw $_connectRefusal',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: Colors.red,
+              ),
             ),
           ValueListenableBuilder<VpnStats>(
             valueListenable: VpnStatsChannel.instance.listenable,
