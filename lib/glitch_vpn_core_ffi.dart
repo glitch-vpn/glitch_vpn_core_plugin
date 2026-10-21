@@ -147,10 +147,8 @@ class GlitchVpnCoreFfi {
     }
   }
 
-  String getCoreVersionsJson() => _consumeCString(
-    _bindings.GetCoreVersions(),
-    '{"xray_core":"unknown","amneziawg":"unknown"}',
-  );
+  String getCoreVersionsJson() =>
+      _consumeCString(_bindings.GetCoreVersions(), '{}');
 
   String coreCapabilitiesJson() =>
       _consumeCString(_bindings.CoreCapabilities(), '{"engines":[]}');

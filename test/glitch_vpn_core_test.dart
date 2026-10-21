@@ -227,6 +227,48 @@ void main() {
     expect(calls, 2);
   });
 
+  group('CoreVersions', () {
+    test('reads every engine the core reports', () {
+      final v = CoreVersions.tryParse(
+        '{"xray_core":"25.3.6","amneziawg":"0.2.12","mihomo":"1.19.2"}',
+      )!;
+      expect(v.xrayCore, '25.3.6');
+      expect(v.amneziawg, '0.2.12');
+      expect(v.mihomo, '1.19.2');
+    });
+
+    test('an engine absent or reported unknown is null', () {
+      final v = CoreVersions.tryParse(
+        '{"xray_core":"unknown","amneziawg":" "}',
+      )!;
+      expect(v.xrayCore, isNull);
+      expect(v.amneziawg, isNull);
+      expect(v.mihomo, isNull);
+    });
+
+    test('garbage is null', () {
+      expect(CoreVersions.tryParse('not json'), isNull);
+      expect(CoreVersions.tryParse('[1,2]'), isNull);
+    });
+
+    test('getCoreVersions never throws', () async {
+      addTearDown(() => GlitchVpnCore.debugCoreVersionsJsonProvider = null);
+      GlitchVpnCore.debugCoreVersionsJsonProvider = () async =>
+          throw ArgumentError('library did not load');
+      final failed = await GlitchVpnCore.getCoreVersions();
+      expect(failed.xrayCore, isNull);
+      expect(failed.amneziawg, isNull);
+      expect(failed.mihomo, isNull);
+
+      GlitchVpnCore.debugCoreVersionsJsonProvider = () async => 'not json';
+      expect((await GlitchVpnCore.getCoreVersions()).mihomo, isNull);
+
+      GlitchVpnCore.debugCoreVersionsJsonProvider = () async =>
+          '{"mihomo":"1.19.2"}';
+      expect((await GlitchVpnCore.getCoreVersions()).mihomo, '1.19.2');
+    });
+  });
+
   test('PingResult.fromJson tolerates missing fields', () {
     final r = PingResult.fromJson(const {
       'index': 3,

@@ -119,6 +119,8 @@ a folder picker on Windows if you want the user to choose.
 `listInstalledApps` / `appIcons` / `pickExecutable` for building a
 split-tunneling picker; `setConnectionInspector` for a per-connection event
 stream; `setLogsVerbosity` and `setMemoryLimit`; `availableEngines()` to hide
-what a given build does not contain.
+what a given build does not contain; `getCoreVersions()` for the engines'
+versions, where `xrayCore`, `amneziawg` and `mihomo` are each null for an engine
+the build lacks.
 
 The app under `example/` exercises the whole API and doubles as a test client.

@@ -1601,18 +1601,26 @@ class GlitchVpnCore {
     return const <PingResult>[];
   }
 
+  /// Reads the versions JSON instead of the native library when set, so the
+  /// never-throws rule is testable without it.
+  @visibleForTesting
+  static Future<String> Function()? debugCoreVersionsJsonProvider;
+
+  /// Never throws: a library that does not load reads as no versions at all.
   static Future<CoreVersions> getCoreVersions() async {
-    await initialize();
     try {
-      final raw = GlitchVpnCoreFfi.instance.getCoreVersionsJson();
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        final xray = decoded['xray_core']?.toString() ?? 'unknown';
-        final awg = decoded['amneziawg']?.toString() ?? 'unknown';
-        return CoreVersions(xrayCore: xray, amneziawg: awg);
-      }
-    } catch (_) {}
-    return const CoreVersions(xrayCore: 'unknown', amneziawg: 'unknown');
+      final json =
+          await (debugCoreVersionsJsonProvider?.call() ??
+              _readCoreVersionsJson());
+      return CoreVersions.tryParse(json) ?? const CoreVersions();
+    } catch (_) {
+      return const CoreVersions();
+    }
+  }
+
+  static Future<String> _readCoreVersionsJson() async {
+    await initialize();
+    return GlitchVpnCoreFfi.instance.getCoreVersionsJson();
   }
 
   Future<AndroidAppsPage> appsListing(
@@ -1796,10 +1804,34 @@ class PingResult {
   );
 }
 
+/// Engine versions of the loaded core. A field is null for an engine not in
+/// this build, or one the build did not stamp with a version.
 class CoreVersions {
-  final String xrayCore;
-  final String amneziawg;
-  const CoreVersions({required this.xrayCore, required this.amneziawg});
+  final String? xrayCore;
+  final String? amneziawg;
+  final String? mihomo;
+
+  const CoreVersions({this.xrayCore, this.amneziawg, this.mihomo});
+
+  static CoreVersions? tryParse(String json) {
+    try {
+      final m = jsonDecode(json);
+      if (m is! Map) return null;
+      // The core reports "unknown" for an engine linked without a version.
+      String? version(String key) {
+        final v = (m[key] ?? '').toString().trim();
+        return (v.isEmpty || v == 'unknown') ? null : v;
+      }
+
+      return CoreVersions(
+        xrayCore: version('xray_core'),
+        amneziawg: version('amneziawg'),
+        mihomo: version('mihomo'),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 class _AsyncMutex {

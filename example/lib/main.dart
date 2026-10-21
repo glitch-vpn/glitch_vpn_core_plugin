@@ -108,6 +108,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   MemoryLimit _memoryLimit = MemoryLimit.unlimited;
 
   String _capabilities = '(loading…)';
+  CoreVersions _versions = const CoreVersions();
   String _activeEngine = '';
   final List<String> _logs = [];
   StreamSubscription? _logSub;
@@ -168,9 +169,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
       final caps = await GlitchVpnCore.getCapabilitiesJson();
       final active = GlitchVpnCore.activeEngine();
       final engines = await GlitchVpnCore.availableEngines();
+      final versions = await GlitchVpnCore.getCoreVersions();
       if (!mounted) return;
       setState(() {
         _capabilities = caps;
+        _versions = versions;
         _activeEngine = active;
         _availableEngines = engines;
         // If the current pick isn't in this build (composition-dependent),
@@ -414,6 +417,12 @@ class _CoreTestPageState extends State<CoreTestPage> {
           const SizedBox(height: 6),
           SelectableText(
             _capabilities,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+          SelectableText(
+            'xray ${_versions.xrayCore ?? '-'} · '
+            'amneziawg ${_versions.amneziawg ?? '-'} · '
+            'mihomo ${_versions.mihomo ?? '-'}',
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
         ],
