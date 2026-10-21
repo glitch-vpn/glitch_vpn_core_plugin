@@ -96,8 +96,9 @@ does not traverse the tunnel — this is why the exit IP is resolved core-side.
 **Windows.** TUN mode needs elevation. `ensureAdmin()` first looks for the
 `GlitchVpnCore` system service that the core release ships: with it installed,
 the tunnel runs without a UAC prompt; without it, the process relaunches
-elevated. Installing the service is the app installer's job. Debug builds
-always take the UAC route.
+elevated. The build puts `glitch_vpn_core_service.exe` next to the app's
+executable; installing it as the service is the app installer's job. Debug
+builds always take the UAC route.
 
 **Linux.** TUN via the native adapter; same API, no service.
 

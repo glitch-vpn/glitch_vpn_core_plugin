@@ -56,7 +56,8 @@ target_link_libraries(${PLUGIN_NAME}
   Ole32
 )
 
-# DLL source: LIBGLITCHCORE_LOCAL → committed libs/ → pinned release (pubspec.yaml).
+# Binaries source: LIBGLITCHCORE_LOCAL → a local, gitignored windows/libs/ that
+# holds all three bundled files → the pinned release (pubspec.yaml).
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../pubspec.yaml" _pubspec)
 string(REGEX MATCH "libglitchcore_version:[ \t]*([^\n\r]+)" _ "${_pubspec}")
 string(STRIP "${CMAKE_MATCH_1}" LIBGLITCHCORE_VERSION)
@@ -68,7 +69,9 @@ string(STRIP "${CMAKE_MATCH_1}" LIBGLITCHCORE_SHA)
 
 if(DEFINED ENV{LIBGLITCHCORE_LOCAL})
   set(_core_win "$ENV{LIBGLITCHCORE_LOCAL}/windows")
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/libglitchcore.dll")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/libglitchcore.dll"
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/wintun.dll"
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/glitch_vpn_core_service.exe")
   set(_core_win "${CMAKE_CURRENT_SOURCE_DIR}/libs")
 else()
   set(_dl "${CMAKE_CURRENT_BINARY_DIR}/libglitchcore/${LIBGLITCHCORE_VERSION}")
@@ -98,9 +101,11 @@ else()
 endif()
 
 # Bundled next to the .exe; geo assets are the app's own (connect geoAssetsDir).
+# The service binary rides along for the app's installer to register.
 set(glitch_vpn_core_bundled_libraries
   "${_core_win}/libglitchcore.dll"
   "${_core_win}/wintun.dll"
+  "${_core_win}/glitch_vpn_core_service.exe"
   PARENT_SCOPE
 )
 
