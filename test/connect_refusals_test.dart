@@ -10,6 +10,13 @@ const _texts = VpnNotificationTexts(
   connected: 'connected',
   disconnecting: 'disconnecting',
   disconnectAction: 'disconnect',
+  byteUnits: VpnByteUnits(
+    bytes: 'b',
+    kilobytes: 'kb',
+    megabytes: 'mb',
+    gigabytes: 'gb',
+    terabytes: 'tb',
+  ),
 );
 
 void main() {

@@ -75,6 +75,13 @@ const _notificationTexts = VpnNotificationTexts(
   connected: 'Connected',
   disconnecting: 'Disconnecting…',
   disconnectAction: 'Disconnect',
+  byteUnits: VpnByteUnits(
+    bytes: 'B',
+    kilobytes: 'KB',
+    megabytes: 'MB',
+    gigabytes: 'GB',
+    terabytes: 'TB',
+  ),
 );
 
 // A second language, to replace the words mid-session.
@@ -85,6 +92,13 @@ const _notificationTextsDe = VpnNotificationTexts(
   connected: 'Verbunden',
   disconnecting: 'Trennen…',
   disconnectAction: 'Trennen',
+  byteUnits: VpnByteUnits(
+    bytes: 'Byte',
+    kilobytes: 'kB',
+    megabytes: 'MB',
+    gigabytes: 'GB',
+    terabytes: 'TB',
+  ),
 );
 
 // Runs when Android starts the tunnel with no app session (always-on, or a

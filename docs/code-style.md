@@ -78,6 +78,11 @@ static VpnConnEvent? tryParse(String json) {
   — a shared vocabulary with the core; new partial-result models reuse these
   literals, never invent parallel ones.
 
+A value the plugin sends to the platform rather than parses (the
+notification's `VpnByteUnits` inside `VpnNotificationTexts`) is a const class
+with named, required fields, flattened into the same string map by `toMap`;
+the Kotlin side reads every key or treats the set as absent.
+
 ## 3. Event dispatch
 
 `_onCoreEvent` is the single switch over `GlitchVpnCoreFfiEventCode`. A new

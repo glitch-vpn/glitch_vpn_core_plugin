@@ -35,6 +35,13 @@ const texts = VpnNotificationTexts(
   connected: 'Connected',
   disconnecting: 'Disconnecting…',
   disconnectAction: 'Disconnect',
+  byteUnits: VpnByteUnits(
+    bytes: 'B',
+    kilobytes: 'KB',
+    megabytes: 'MB',
+    gigabytes: 'GB',
+    terabytes: 'TB',
+  ),
 );
 
 await core.connect(
@@ -109,8 +116,13 @@ Geo matchers need geoip.dat/geosite.dat — you supply them, see below.
 **Android.** The plugin runs the tunnel in a foreground service with a live
 notification and can disconnect from it headlessly. Ask for the notification
 permission (`requestNotificationPermission`). The notification's words are the
-app's: `connect(notification: VpnNotificationTexts(...))` carries them, and
-`updateNotification` changes them or the line under the title mid-session.
+app's, the traffic counter's units among them:
+`connect(notification: VpnNotificationTexts(...))` carries them, and
+`updateNotification` changes them or the line under the title mid-session. The
+counter shows the app's own network traffic since the tunnel came up: the
+engine's, proxied and direct alike, with the protocols' overhead, and anything
+else the app fetches meanwhile, such as a subscription refresh.
+`onStatsChanged` counts the proxied traffic only.
 The whole app package is excluded from the VPN, so in-app HTTP does not
 traverse the tunnel — this is why the exit IP is resolved core-side.
 

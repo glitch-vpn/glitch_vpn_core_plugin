@@ -25,6 +25,13 @@ await GlitchVpnCore.instance.connect(
     connected: 'Connected',
     disconnecting: 'Disconnecting…',
     disconnectAction: 'Disconnect',
+    byteUnits: VpnByteUnits(
+      bytes: 'B',
+      kilobytes: 'KB',
+      megabytes: 'MB',
+      gigabytes: 'GB',
+      terabytes: 'TB',
+    ),
   ),
 );
 ```

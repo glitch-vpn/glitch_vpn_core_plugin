@@ -56,7 +56,8 @@ class GlitchVpnCoreConfig {
 /// plugin has none of its own. [channel] names the notification channel in
 /// the system's settings; [title] is also the session name the system's VPN
 /// settings show. [connected] stands as the line while no `countryLine` has
-/// been sent ([GlitchVpnCore.updateNotification]).
+/// been sent ([GlitchVpnCore.updateNotification]). [byteUnits] label the
+/// traffic counter.
 class VpnNotificationTexts {
   final String title;
   final String channel;
@@ -64,6 +65,7 @@ class VpnNotificationTexts {
   final String connected;
   final String disconnecting;
   final String disconnectAction;
+  final VpnByteUnits byteUnits;
 
   const VpnNotificationTexts({
     required this.title,
@@ -72,6 +74,7 @@ class VpnNotificationTexts {
     required this.connected,
     required this.disconnecting,
     required this.disconnectAction,
+    required this.byteUnits,
   });
 
   Map<String, String> toMap() => {
@@ -81,7 +84,32 @@ class VpnNotificationTexts {
     'connected': connected,
     'disconnecting': disconnecting,
     'disconnectAction': disconnectAction,
+    'bytes': byteUnits.bytes,
+    'kilobytes': byteUnits.kilobytes,
+    'megabytes': byteUnits.megabytes,
+    'gigabytes': byteUnits.gigabytes,
+    'terabytes': byteUnits.terabytes,
   };
+}
+
+/// The unit words of the notification's traffic counter, in the app's
+/// language: `1.5 MB` in English, `1.5 МБ` in Russian. Each step is 1024 of
+/// the one before; the number keeps a dot for its decimal mark in every
+/// language.
+class VpnByteUnits {
+  final String bytes;
+  final String kilobytes;
+  final String megabytes;
+  final String gigabytes;
+  final String terabytes;
+
+  const VpnByteUnits({
+    required this.bytes,
+    required this.kilobytes,
+    required this.megabytes,
+    required this.gigabytes,
+    required this.terabytes,
+  });
 }
 
 enum VpnEngine { xray, awg, mihomo }

@@ -336,6 +336,13 @@ AllowedIPs = 0.0.0.0/0
         connected: 'Cd',
         disconnecting: 'Di',
         disconnectAction: 'D',
+        byteUnits: VpnByteUnits(
+          bytes: 'B',
+          kilobytes: 'K',
+          megabytes: 'M',
+          gigabytes: 'G',
+          terabytes: 'T',
+        ),
       );
       expect(texts.toMap(), {
         'title': 'T',
@@ -344,6 +351,11 @@ AllowedIPs = 0.0.0.0/0
         'connected': 'Cd',
         'disconnecting': 'Di',
         'disconnectAction': 'D',
+        'bytes': 'B',
+        'kilobytes': 'K',
+        'megabytes': 'M',
+        'gigabytes': 'G',
+        'terabytes': 'T',
       });
     });
   });

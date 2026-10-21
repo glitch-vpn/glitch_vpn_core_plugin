@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -14,6 +15,7 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.content.pm.ServiceInfo
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -103,9 +105,13 @@ class GlitchVpnService : VpnService() {
         }
     }
 
-    // "rx,tx" from the Go core, or "" - keeps the notification's counters
-    // moving after the Dart isolate is gone.
+    // "rx,tx" from the Go core, or "" while no engine runs - answers after the
+    // Dart isolate is gone. Its counts are the proxied traffic only.
     private external fun nativeEngineTraffic(): String
+
+    // This app's bytes on the network when the tunnel came up.
+    private var uidRxAtStart = TrafficStats.UNSUPPORTED.toLong()
+    private var uidTxAtStart = TrafficStats.UNSUPPORTED.toLong()
 
     // Keepalive: periodic notification updates signal the OS the service is active,
     // discouraging aggressive OEM battery management from freezing the process.
@@ -292,11 +298,10 @@ class GlitchVpnService : VpnService() {
     }
 
     // Locale.US keeps a dot decimal separator regardless of device locale.
-    private fun humanBytes(b: Long): String {
-        if (b < 1024) return "$b B"
-        val units = arrayOf("KB", "MB", "GB", "TB")
+    private fun humanBytes(b: Long, units: List<String>): String {
+        if (b < 1024) return "$b ${units[0]}"
         var v = b / 1024.0
-        var i = 0
+        var i = 1
         while (v >= 1024 && i < units.size - 1) {
             v /= 1024
             i++
@@ -305,20 +310,38 @@ class GlitchVpnService : VpnService() {
         return "${String.format(Locale.US, "%.${digits}f", v)} ${units[i]}"
     }
 
-    private fun formatStatsLine(rx: Long, tx: Long): String =
-        "↓ ${humanBytes(rx)}   ↑ ${humanBytes(tx)}"
+    private fun startTrafficCount() {
+        val uid = Process.myUid()
+        uidRxAtStart = TrafficStats.getUidRxBytes(uid)
+        uidTxAtStart = TrafficStats.getUidTxBytes(uid)
+    }
+
+    // The app is outside its own tunnel, so the engine's sockets, proxied and
+    // direct alike, count against its uid, with the protocols' overhead and
+    // the app's own fetches (subscriptions, geo files) on top. Where the
+    // kernel keeps no per-uid figures, the core's proxied-only counts stand in.
+    private fun tunnelTraffic(coreRx: Long, coreTx: Long): Pair<Long, Long> {
+        val uid = Process.myUid()
+        val rx = TrafficStats.getUidRxBytes(uid)
+        val tx = TrafficStats.getUidTxBytes(uid)
+        val unsupported = TrafficStats.UNSUPPORTED.toLong()
+        if (unsupported in listOf(rx, tx, uidRxAtStart, uidTxAtStart)) return coreRx to coreTx
+        return (rx - uidRxAtStart).coerceAtLeast(0) to (tx - uidTxAtStart).coerceAtLeast(0)
+    }
 
     // Keeps the previous stats line on any error (JNI missing, core not yet
     // up). True when the core reported a running engine.
-    private fun refreshNativeStats(): Boolean {
+    private fun refreshStats(): Boolean {
         try {
             val raw = nativeEngineTraffic()
             if (raw.isBlank()) return false
             val parts = raw.split(",")
             if (parts.size != 2) return false
-            val rx = parts[0].toLongOrNull() ?: return false
-            val tx = parts[1].toLongOrNull() ?: return false
-            statsLine = formatStatsLine(rx, tx)
+            val coreRx = parts[0].toLongOrNull() ?: return false
+            val coreTx = parts[1].toLongOrNull() ?: return false
+            val units = texts?.byteUnits ?: return true
+            val (rx, tx) = tunnelTraffic(coreRx, coreTx)
+            statsLine = "↓ ${humanBytes(rx, units)}   ↑ ${humanBytes(tx, units)}"
             return true
         } catch (_: Throwable) {
             return false
@@ -432,7 +455,7 @@ class GlitchVpnService : VpnService() {
                 try {
                     // A running engine is connected even when the Dart side
                     // that would say so is gone.
-                    if (refreshNativeStats()) markConnected()
+                    if (refreshStats()) markConnected()
                     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     nm.notify(NOTIF_ID, buildNotification())
                 } catch (t: Throwable) {
@@ -551,6 +574,7 @@ class GlitchVpnService : VpnService() {
                 finalized = false
 
                 Log.i(TAG, "TUN established, kept PFD ownership, engineFd=$engineFd")
+                startTrafficCount()
                 sendTunReady(intent, engineFd)
                 startKeepAliveUpdates()
                 Service.START_STICKY

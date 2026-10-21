@@ -253,8 +253,10 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 result.success(state?.let { hashMapOf("alwaysOn" to it.first, "lockdown" to it.second) })
             }
 
+            // A service that is not in the foreground holds no tunnel and no
+            // notification: starting it only to finalise would be all it did.
             "stopTunnel" -> {
-                requestFinalizeFromService()
+                if (GlitchVpnService.inForeground) requestFinalizeFromService()
                 result.success(true)
             }
 
