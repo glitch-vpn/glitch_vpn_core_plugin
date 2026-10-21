@@ -21,6 +21,29 @@ void main() {
 const _sampleVlessReality =
     'vless://00000000-0000-0000-0000-000000000000@192.0.2.10:8443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=0123456789abcdef&flow=xtls-rprx-vision#reality-sample';
 
+// v2rayN's share-link form: base64 of the server's JSON.
+const _sampleVmessServer = {
+  'v': '2',
+  'ps': 'vmess-sample',
+  'add': '192.0.2.30',
+  'port': '443',
+  'id': '00000000-0000-0000-0000-000000000000',
+  'aid': '0',
+  'net': 'ws',
+  'host': 'example.com',
+  'path': '/ws',
+  'tls': 'tls',
+  'sni': 'example.com',
+};
+final _sampleVmess =
+    'vmess://${base64.encode(utf8.encode(jsonEncode(_sampleVmessServer)))}';
+
+const _sampleTuic =
+    'tuic://00000000-0000-0000-0000-000000000000:password@192.0.2.40:443?sni=example.com&alpn=h3&congestion_control=bbr#tuic-sample';
+
+const _sampleAnyTls =
+    'anytls://password@192.0.2.50:443?sni=example.com#anytls-sample';
+
 const _sampleAwg = '''
 [Interface]
 PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -643,6 +666,24 @@ class _CoreTestPageState extends State<CoreTestPage> {
     ),
   );
 
+  void _selectEngine(VpnEngine engine) {
+    _engine = engine;
+    // strategy/fingerprint/domain-strategy sets differ per engine
+    _balancerStrategy = '';
+    _fingerprint = '';
+    _domainStrategy = '';
+  }
+
+  // A sample also picks an engine that speaks it, when this build has one.
+  Widget _sampleButton(String label, String link, VpnEngine engine) =>
+      TextButton(
+        onPressed: () => setState(() {
+          _configCtrl.text = link;
+          if (_availableEngines.contains(engine)) _selectEngine(engine);
+        }),
+        child: Text(label),
+      );
+
   Widget _configCard() => Card(
     child: Padding(
       padding: const EdgeInsets.all(12),
@@ -659,24 +700,17 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 items: _availableEngines
                     .map((e) => DropdownMenuItem(value: e, child: Text(e.name)))
                     .toList(),
-                onChanged: (e) => setState(() {
-                  _engine = e!;
-                  // strategy/fingerprint/domain-strategy sets differ per engine
-                  _balancerStrategy = '';
-                  _fingerprint = '';
-                  _domainStrategy = '';
-                }),
+                onChanged: (e) => setState(() => _selectEngine(e!)),
               ),
-              const Spacer(),
-              TextButton(
-                onPressed: () =>
-                    setState(() => _configCtrl.text = _sampleVlessReality),
-                child: const Text('vless'),
-              ),
-              TextButton(
-                onPressed: () => setState(() => _configCtrl.text = _sampleAwg),
-                child: const Text('awg'),
-              ),
+            ],
+          ),
+          Wrap(
+            children: [
+              _sampleButton('vless', _sampleVlessReality, VpnEngine.xray),
+              _sampleButton('vmess', _sampleVmess, VpnEngine.xray),
+              _sampleButton('tuic', _sampleTuic, VpnEngine.mihomo),
+              _sampleButton('anytls', _sampleAnyTls, VpnEngine.mihomo),
+              _sampleButton('awg', _sampleAwg, VpnEngine.awg),
               TextButton(
                 onPressed: () => setState(() {
                   final t = _configCtrl.text.trim();
@@ -1497,7 +1531,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
               child: Text(
-                'Toggle on to see each routed connection (host → outbound).',
+                'Toggle on to see each routed connection (inbound → host → outbound).',
                 style: TextStyle(fontSize: 11, color: Colors.grey),
               ),
             )
@@ -1525,6 +1559,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                       Expanded(
                         child: Text(
                           '${_clock(c.at)} '
+                          '${c.status == 'rejected' ? 'rejected ' : ''}'
+                          '${c.inbound.isNotEmpty ? '${c.inbound} → ' : ''}'
                           '${c.network} ${c.host}:${c.port}  →  ${c.outbound}'
                           '${c.rule.isNotEmpty ? '  (${c.rule})' : ''}',
                           style: const TextStyle(
@@ -1559,7 +1595,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 items: const [
                   DropdownMenuItem(value: -1, child: Text('off')),
                   DropdownMenuItem(value: 0, child: Text('v0 errors')),
-                  DropdownMenuItem(value: 1, child: Text('v1 info')),
+                  DropdownMenuItem(value: 1, child: Text('v1 no debug')),
                   DropdownMenuItem(value: 2, child: Text('v2 all')),
                 ],
                 onChanged: (v) {

@@ -1,5 +1,5 @@
 name: glitch_vpn_core
-description: "Flutter FFI plugin for the libglitchcore VPN core: Xray (VLESS/Trojan/Shadowsocks), AmneziaWG and mihomo engines behind one Dart API."
+description: "Flutter FFI plugin for the libglitchcore VPN core: Xray (VLESS/VMess/Trojan/Shadowsocks), AmneziaWG and mihomo (Hysteria2/TUIC/AnyTLS) engines behind one Dart API."
 version: 0.0.1
 homepage: https://github.com/glitch-vpn/glitch_vpn_core_plugin
 

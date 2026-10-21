@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:glitch_vpn_core/src/core_time.dart';
 
+/// A line's level as the engine that wrote it gave it. [error] and [fatal]
+/// arrive as LogError (401), the rest as LogEvent (400).
 enum VpnLogLevel {
-  trace,
   debug,
   info,
   warn,
@@ -12,12 +13,11 @@ enum VpnLogLevel {
   fatal;
 
   /// The core's level string; one it does not name reads as [info].
-  static VpnLogLevel fromCore(String level) => switch (level.toLowerCase()) {
-    'trace' => trace,
+  static VpnLogLevel fromCore(String level) => switch (level) {
     'debug' => debug,
-    'warn' || 'warning' => warn,
+    'warn' => warn,
     'error' => error,
-    'fatal' || 'panic' => fatal,
+    'fatal' => fatal,
     _ => info,
   };
 }

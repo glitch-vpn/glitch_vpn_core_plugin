@@ -1736,7 +1736,7 @@ class GlitchVpnCore {
     }
   }
 
-  /// -1 OFF (default) · 0 errors · 1 info+warn · 2 all.
+  /// -1 OFF (default) · 0 error and fatal · 1 all but debug · 2 all.
   static Future<void> setLogsVerbosity(int level) async {
     try {
       GlitchVpnCoreFfi.instance.setStatusVerbosity(level);

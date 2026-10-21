@@ -5,8 +5,8 @@ brings up the tunnel, routes traffic and streams back everything a UI needs to
 show — status, speed, the server you are on, the exit IP.
 
 One Dart API drives three protocol engines — Xray (VLESS, VMess, Trojan,
-Shadowsocks), AmneziaWG and mihomo (Hysteria2) — on Android, Windows and
-Linux. Which engine is running is a parameter, not a rewrite.
+Shadowsocks), AmneziaWG and mihomo (Hysteria2, TUIC, AnyTLS) — on Android,
+Windows and Linux. Which engine is running is a parameter, not a rewrite.
 
 ```dart
 await GlitchVpnCore.initialize();

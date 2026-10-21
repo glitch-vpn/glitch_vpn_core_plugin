@@ -189,8 +189,11 @@ versions, where `xrayCore`, `amneziawg` and `mihomo` are each null for an engine
 the build lacks.
 
 Log lines arrive on `onLogsChanged` once `setLogsVerbosity` turns them on. Each
-`VpnLog` carries `at` (the core's time, in UTC), `level` (a `VpnLogLevel`),
+`VpnLog` carries `at` (the core's time, in UTC), `level` (a `VpnLogLevel`:
+debug, info, warn, error or fatal, as the engine that wrote the line gave it),
 `component` (the engine or subsystem that wrote it, empty when none) and
-`message`. A connection event's `at` is the core's time too.
+`message`. A connection event's `at` is the core's time too; its `inbound` is
+the listener the connection arrived on, and a connection a block rule refused
+arrives with `status: rejected`.
 
 The app under `example/` exercises the whole API and doubles as a test client.

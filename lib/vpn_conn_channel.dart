@@ -10,6 +10,10 @@ class VpnConnEvent {
   final String network; // tcp | udp
   final String host;
   final String port;
+
+  /// The listener the connection arrived on: xray's inbound tag, mihomo's
+  /// listener name or, for a listener without one, its type. Empty on a
+  /// mihomo `rejected` row, whose rule-match line names no inbound.
   final String inbound;
   final String outbound; // proxy | direct | block | proxy-N | ...
   final String rule; // mihomo only

@@ -9,7 +9,9 @@ class VpnServerInfo {
   final String name; // #fragment remark, '' if the link had none
   final String host;
   final int port; // 0 if unknown
-  final String protocol; // vless | trojan | ss | hysteria2 | awg
+
+  /// vless | vmess | trojan | ss | hysteria2 | tuic | anytls | awg
+  final String protocol;
 
   const VpnServerInfo({
     required this.index,

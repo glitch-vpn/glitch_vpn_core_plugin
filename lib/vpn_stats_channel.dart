@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 
+/// [downloadBytes] and [uploadBytes] are the session's proxied bytes, on every
+/// engine; direct-routed traffic is not counted.
 class VpnStats {
   final int downloadBytes;
   final int uploadBytes;

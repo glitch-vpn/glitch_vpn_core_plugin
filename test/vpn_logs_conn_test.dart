@@ -53,14 +53,18 @@ void main() {
       expect(VpnLog.tryParse('{"level":"info","message":""}'), isNull);
     });
 
-    test('levels map from every engine spelling', () {
-      expect(VpnLogLevel.fromCore('trace'), VpnLogLevel.trace);
+    test('levels map from the names the core emits', () {
       expect(VpnLogLevel.fromCore('debug'), VpnLogLevel.debug);
       expect(VpnLogLevel.fromCore('info'), VpnLogLevel.info);
-      expect(VpnLogLevel.fromCore('warning'), VpnLogLevel.warn);
-      expect(VpnLogLevel.fromCore('ERROR'), VpnLogLevel.error);
-      expect(VpnLogLevel.fromCore('panic'), VpnLogLevel.fatal);
-      expect(VpnLogLevel.fromCore('silent'), VpnLogLevel.info);
+      expect(VpnLogLevel.fromCore('warn'), VpnLogLevel.warn);
+      expect(VpnLogLevel.fromCore('error'), VpnLogLevel.error);
+      expect(VpnLogLevel.fromCore('fatal'), VpnLogLevel.fatal);
+    });
+
+    test('a level the core does not name reads as info', () {
+      for (final level in ['', 'trace', 'warning', 'ERROR', 'silent']) {
+        expect(VpnLogLevel.fromCore(level), VpnLogLevel.info, reason: level);
+      }
     });
   });
 
@@ -86,6 +90,32 @@ void main() {
         '{"ts":"2026-10-21T10:00:01.5Z","engine":"xray","host":"x.com"}',
       )!;
       expect(event.at, DateTime.utc(2026, 10, 21, 10, 0, 1, 500));
+    });
+
+    test('carries the inbound of an accepted row', () {
+      final event = VpnConnEvent.tryParse(
+        '{"ts":"2026-10-21T10:00:01Z","engine":"mihomo","status":"accepted",'
+        '"network":"tcp","host":"example.com","port":"443",'
+        '"inbound":"DEFAULT-MIXED","outbound":"proxy","rule":"Match"}',
+      )!;
+      expect(event.inbound, 'DEFAULT-MIXED');
+      expect(event.blocked, isFalse);
+    });
+
+    test('a rejected row with no inbound is blocked', () {
+      final event = VpnConnEvent.tryParse(
+        '{"ts":"2026-10-21T10:00:01Z","engine":"mihomo","status":"rejected",'
+        '"network":"tcp","host":"ads.example.com","port":"443",'
+        '"outbound":"REJECT","rule":"DomainSuffix example.com"}',
+      )!;
+      expect(event.status, 'rejected');
+      expect(event.inbound, isEmpty);
+      expect(event.blocked, isTrue);
+    });
+
+    test('garbage is null', () {
+      expect(VpnConnEvent.tryParse('not json'), isNull);
+      expect(VpnConnEvent.tryParse('[1]'), isNull);
     });
   });
 }
