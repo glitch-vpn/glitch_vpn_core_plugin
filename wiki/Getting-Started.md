@@ -135,4 +135,9 @@ what a given build does not contain; `getCoreVersions()` for the engines'
 versions, where `xrayCore`, `amneziawg` and `mihomo` are each null for an engine
 the build lacks.
 
+Log lines arrive on `onLogsChanged` once `setLogsVerbosity` turns them on. Each
+`VpnLog` carries `at` (the core's time, in UTC), `level` (a `VpnLogLevel`),
+`component` (the engine or subsystem that wrote it, empty when none) and
+`message`. A connection event's `at` is the core's time too.
+
 The app under `example/` exercises the whole API and doubles as a test client.

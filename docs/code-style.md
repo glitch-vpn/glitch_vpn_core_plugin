@@ -37,6 +37,9 @@ class VpnServerChannel {
   `sync: true`.
 - Session-scoped channels hold a **nullable** value (null = no session data)
   and expose `reset()`; process-scoped ones (status) hold a non-null default.
+  A process-scoped stream with no meaningful default (logs) holds a nullable
+  value, null until the first event, and has no `reset()`: it outlives a
+  session.
 - Dedupe belongs to whoever knows the semantics: status dedupes in `emit`
   (same enum + reason), core-fed channels rely on the core's payload dedupe
   and re-emit whatever arrives — a replay must reach new listeners.
@@ -54,7 +57,7 @@ static VpnConnEvent? tryParse(String json) {
     final m = jsonDecode(json);
     if (m is! Map) return null;
     String s(String k) => (m[k] ?? '').toString();
-    return VpnConnEvent(engine: s('engine'), ..., at: DateTime.now());
+    return VpnConnEvent(engine: s('engine'), ..., at: coreTime(m['ts']));
   } catch (_) {
     return null;
   }
@@ -64,8 +67,10 @@ static VpnConnEvent? tryParse(String json) {
 - `is! Map` guard first; per-field defaults (`as int? ?? 0`, `(m[k] ??
   '').toString()`); optional strings normalize empty → null when null carries
   meaning.
-- Timestamps are stamped at parse (`DateTime.now()`), not carried in the
-  payload.
+- A payload that carries the core's `ts` (logs, connection events) is timed
+  by it, through `coreTime` in `lib/src/`, which falls back to the arrival
+  time only when `ts` is absent or malformed. A payload the core never stamps
+  (stats, server, IP) is stamped at parse.
 - Fields are final, constructors const where possible. No `fromJson` that
   throws — this boundary receives whatever a future core version sends.
 - Partial results use the core's sentinel error strings (`'disabled'`,

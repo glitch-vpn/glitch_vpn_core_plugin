@@ -138,13 +138,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
     await GlitchVpnCore.setLogsVerbosity(_verbosity);
 
     _logSub = GlitchVpnCore.instance.onLogsChanged.listen((log) {
-      String line = log.message;
-      try {
-        final m = jsonDecode(log.message);
-        if (m is Map) {
-          line = '[${m['level']}] ${m['component']}: ${m['message']}';
-        }
-      } catch (_) {}
+      final line =
+          '${_clock(log.at)} [${log.level.name}] '
+          '${log.component}: ${log.message}';
       if (!mounted) return;
       setState(() {
         _logs.insert(0, line);
@@ -1426,6 +1422,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
                       ),
                       Expanded(
                         child: Text(
+                          '${_clock(c.at)} '
                           '${c.network} ${c.host}:${c.port}  →  ${c.outbound}'
                           '${c.rule.isNotEmpty ? '  (${c.rule})' : ''}',
                           style: const TextStyle(
@@ -1598,6 +1595,14 @@ class _CoreTestPageState extends State<CoreTestPage> {
     VpnStatus.error => Colors.red,
     VpnStatus.disconnected => Colors.grey,
   };
+
+  // The core's time, shown local to the machine running the example.
+  String _clock(DateTime at) {
+    final t = at.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final ms = t.millisecond.toString().padLeft(3, '0');
+    return '${two(t.hour)}:${two(t.minute)}:${two(t.second)}.$ms';
+  }
 
   String _fmt(int b) {
     if (b < 1024) return '$b B';

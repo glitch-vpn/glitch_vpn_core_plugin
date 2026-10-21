@@ -1,12 +1,63 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:glitch_vpn_core/src/core_time.dart';
 
+enum VpnLogLevel {
+  trace,
+  debug,
+  info,
+  warn,
+  error,
+  fatal;
+
+  /// The core's level string; one it does not name reads as [info].
+  static VpnLogLevel fromCore(String level) => switch (level.toLowerCase()) {
+    'trace' => trace,
+    'debug' => debug,
+    'warn' || 'warning' => warn,
+    'error' => error,
+    'fatal' || 'panic' => fatal,
+    _ => info,
+  };
+}
+
+/// One core log line (LogEvent 400 / LogError 401).
 class VpnLog {
-  final String message;
+  /// The core's time, UTC.
   final DateTime at;
-  const VpnLog({required this.message, required this.at});
-  factory VpnLog.now(String message) =>
-      VpnLog(message: message, at: DateTime.now());
+  final VpnLogLevel level;
+
+  /// The engine or subsystem that wrote the line (`mihomo`, `AWG`,
+  /// `Xray/Inbound`, ...); empty when the core names none.
+  final String component;
+  final String message;
+
+  const VpnLog({
+    required this.at,
+    required this.level,
+    required this.component,
+    required this.message,
+  });
+
+  /// Null for garbage and for a payload with no message: an unknown event code
+  /// lands here too, and must not show up as a blank line.
+  static VpnLog? tryParse(String json) {
+    try {
+      final m = jsonDecode(json);
+      if (m is! Map) return null;
+      final message = (m['message'] ?? '').toString();
+      if (message.isEmpty) return null;
+      return VpnLog(
+        at: coreTime(m['ts']),
+        level: VpnLogLevel.fromCore((m['level'] ?? '').toString()),
+        component: (m['component'] ?? '').toString(),
+        message: message,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 class VpnLogsChannel {
@@ -14,20 +65,18 @@ class VpnLogsChannel {
   static final instance = VpnLogsChannel._();
 
   final _ctrl = StreamController<VpnLog>.broadcast(sync: true);
-  final _notifier = ValueNotifier<VpnLog>(VpnLog.now(''));
-  VpnLog _last = VpnLog.now('');
+  final _notifier = ValueNotifier<VpnLog?>(null);
+  VpnLog? _last;
 
   Stream<VpnLog> get stream => _ctrl.stream;
-  ValueListenable<VpnLog> get listenable => _notifier;
-  VpnLog get value => _last;
 
-  void emit(String message) {
-    if (_last.message == message) {
-      return;
-    }
-    final next = VpnLog.now(message);
-    _last = next;
-    _notifier.value = next;
-    _ctrl.add(next);
+  /// Null until the first line arrives.
+  ValueListenable<VpnLog?> get listenable => _notifier;
+  VpnLog? get value => _last;
+
+  void emit(VpnLog log) {
+    _last = log;
+    _notifier.value = log;
+    _ctrl.add(log);
   }
 }

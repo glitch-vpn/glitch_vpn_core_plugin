@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:glitch_vpn_core/src/core_time.dart';
 
 /// One routed connection from the connection inspector (ConnEvent 402).
 class VpnConnEvent {
@@ -12,6 +13,8 @@ class VpnConnEvent {
   final String inbound;
   final String outbound; // proxy | direct | block | proxy-N | ...
   final String rule; // mihomo only
+
+  /// The core's time, UTC.
   final DateTime at;
 
   const VpnConnEvent({
@@ -44,7 +47,7 @@ class VpnConnEvent {
         inbound: s('inbound'),
         outbound: s('outbound'),
         rule: s('rule'),
-        at: DateTime.now(),
+        at: coreTime(m['ts']),
       );
     } catch (_) {
       return null;

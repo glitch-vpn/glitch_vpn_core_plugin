@@ -70,6 +70,7 @@ lib/
                               # _onCoreEvent dispatch, platform helpers
   glitch_vpn_core_ffi.dart    # FFI wrapper + GlitchVpnCoreFfiEventCode
   src/bindings_generated.dart # ffigen output - do not edit
+  src/core_time.dart          # the core's `ts` → DateTime (logs, conn)
   vpn_status_channel.dart     # VpnStatus stream/listenable
   vpn_stats_channel.dart      # traffic/memory/liveness stats
   vpn_logs_channel.dart       # structured logs

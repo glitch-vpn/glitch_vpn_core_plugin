@@ -327,7 +327,8 @@ class GlitchVpnCore {
 
   bool get fileLoggingEnabled => _fileLogging;
 
-  /// Ring caps (<=0 ignored). [toFile] mirrors logs to a temp file.
+  /// Ring caps (<=0 ignored). [toFile] mirrors logs to a temp file, one line
+  /// each, stamped with the core's time in UTC.
   Future<void> configureLogging({
     int? maxLogLines,
     int? maxConnEvents,
@@ -401,7 +402,10 @@ class GlitchVpnCore {
       final sink = _logSink;
       if (_fileLogging && sink != null) {
         try {
-          sink.writeln('${log.at.toIso8601String()} ${log.message}');
+          final source = log.component.isEmpty ? '' : '${log.component}: ';
+          sink.writeln(
+            '${log.at.toIso8601String()} ${log.level.name} $source${log.message}',
+          );
         } catch (_) {}
       }
     });
@@ -1509,7 +1513,8 @@ class GlitchVpnCore {
       case GlitchVpnCoreFfiEventCode.statsError:
       case GlitchVpnCoreFfiEventCode.logEvent:
       case GlitchVpnCoreFfiEventCode.logError:
-        VpnLogsChannel.instance.emit(msg as String);
+        final log = VpnLog.tryParse(msg as String);
+        if (log != null) VpnLogsChannel.instance.emit(log);
         break;
     }
   }
