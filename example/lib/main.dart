@@ -122,6 +122,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
 
   bool _pinging = false;
   List<PingResult>? _pingResults;
+  String? _pingError;
 
   @override
   void initState() {
@@ -304,17 +305,25 @@ class _CoreTestPageState extends State<CoreTestPage> {
     setState(() {
       _pinging = true;
       _pingResults = null;
+      _pingError = null;
     });
     final probe = _probeUrlCtrl.text.trim();
-    final results = await GlitchVpnCore.measurePings(
-      links,
-      probeUrl: probe.isEmpty ? null : probe,
-      timeoutMs: 5000,
-    );
+    List<PingResult>? results;
+    String? error;
+    try {
+      results = await GlitchVpnCore.measurePings(
+        links,
+        probeUrl: probe.isEmpty ? null : probe,
+        timeoutMs: 5000,
+      );
+    } on PlatformException catch (e) {
+      error = '${e.code}: ${e.message ?? ''}';
+    }
     if (!mounted) return;
     setState(() {
       _pinging = false;
       _pingResults = results;
+      _pingError = error;
     });
   }
 
@@ -1282,6 +1291,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   ),
                 ),
               ],
+            ),
+          if (_pingError != null)
+            SelectableText(
+              _pingError!,
+              style: const TextStyle(color: Colors.red, fontSize: 11),
             ),
           if (_pingResults != null && _pingResults!.isEmpty)
             const Text('no links', style: TextStyle(color: Colors.grey)),

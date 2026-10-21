@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glitch_vpn_core/glitch_vpn_core.dart';
 import 'package:glitch_vpn_core/vpn_conn_channel.dart';
@@ -266,6 +267,54 @@ void main() {
       GlitchVpnCore.debugCoreVersionsJsonProvider = () async =>
           '{"mihomo":"1.19.2"}';
       expect((await GlitchVpnCore.getCoreVersions()).mihomo, '1.19.2');
+    });
+  });
+
+  group('measurePings', () {
+    tearDown(() => GlitchVpnCore.debugMeasurePingsJsonProvider = null);
+
+    test('returns a result per link', () async {
+      GlitchVpnCore.debugMeasurePingsJsonProvider = (_) async =>
+          '[{"index":0,"engine":"xray","alive":true,"delayMs":42},'
+          '{"index":1,"engine":"xray","alive":false,"error":"timeout"}]';
+      final results = await GlitchVpnCore.measurePings(['a', 'b']);
+      expect(results, hasLength(2));
+      expect(results[0].delayMs, 42);
+      expect(results[1].error, 'timeout');
+    });
+
+    test('throws with the core reason when it refuses the run', () async {
+      GlitchVpnCore.debugMeasurePingsJsonProvider = (_) async =>
+          '{"error":"invalid character looking for beginning of value"}';
+      await expectLater(
+        GlitchVpnCore.measurePings(['a']),
+        throwsA(
+          isA<PlatformException>()
+              .having((e) => e.code, 'code', 'PING_FAILED')
+              .having(
+                (e) => e.message,
+                'message',
+                contains('invalid character'),
+              ),
+        ),
+      );
+    });
+
+    test('throws on garbage rather than reporting no results', () async {
+      for (final garbage in ['not json', '{}', '42']) {
+        GlitchVpnCore.debugMeasurePingsJsonProvider = (_) async => garbage;
+        await expectLater(
+          GlitchVpnCore.measurePings(['a']),
+          throwsA(
+            isA<PlatformException>().having(
+              (e) => e.code,
+              'code',
+              'PING_FAILED',
+            ),
+          ),
+          reason: garbage,
+        );
+      }
     });
   });
 

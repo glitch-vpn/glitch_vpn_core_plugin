@@ -126,7 +126,8 @@ a folder picker on Windows if you want the user to choose.
 
 ## What else is there
 
-`measurePings(links)` for url-test latency without connecting;
+`measurePings(links)` for url-test latency without connecting (a link that
+fails carries its own `error`; a run the core refuses throws `PING_FAILED`);
 `listInstalledApps` / `appIcons` / `pickExecutable` for building a
 split-tunneling picker; `setConnectionInspector` for a per-connection event
 stream; `setLogsVerbosity` and `setMemoryLimit`; `availableEngines()` to hide

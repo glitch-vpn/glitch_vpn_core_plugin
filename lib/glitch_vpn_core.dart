@@ -1589,7 +1589,16 @@ class GlitchVpnCore {
 
   static String activeEngine() => GlitchVpnCoreFfi.instance.activeEngine();
 
+  /// Answers the ping request instead of the native library when set, so the
+  /// result parsing is testable without it.
+  @visibleForTesting
+  static Future<String> Function(String requestJson)?
+  debugMeasurePingsJsonProvider;
+
   /// Url-test latency per link (through that server). No engine/admin/TUN needed.
+  /// A link that fails carries its own [PingResult.error]; a run the core
+  /// refuses as a whole throws [PlatformException] `PING_FAILED` with the
+  /// core's reason as the message.
   static Future<List<PingResult>> measurePings(
     List<String> links, {
     String? probeUrl,
@@ -1603,17 +1612,26 @@ class GlitchVpnCore {
       'timeoutMs': timeoutMs,
       'concurrency': concurrency,
     });
-    final raw = await GlitchVpnCoreFfi.measurePings(request);
+    final raw =
+        await (debugMeasurePingsJsonProvider?.call(request) ??
+            GlitchVpnCoreFfi.measurePings(request));
+    Object? decoded;
     try {
-      final decoded = jsonDecode(raw);
-      if (decoded is List) {
-        return decoded
-            .whereType<Map>()
-            .map(PingResult.fromJson)
-            .toList(growable: false);
-      }
+      decoded = jsonDecode(raw);
     } catch (_) {}
-    return const <PingResult>[];
+    if (decoded is List) {
+      return decoded
+          .whereType<Map>()
+          .map(PingResult.fromJson)
+          .toList(growable: false);
+    }
+    final coreError = decoded is Map ? decoded['error']?.toString() : null;
+    throw PlatformException(
+      code: 'PING_FAILED',
+      message: (coreError == null || coreError.isEmpty)
+          ? 'unreadable ping results'
+          : coreError,
+    );
   }
 
   /// Reads the versions JSON instead of the native library when set, so the
