@@ -52,8 +52,15 @@ class VpnStatsChannel {
   ValueListenable<VpnStats> get listenable => _notifier;
   VpnStats get value => _last;
 
-  void emit(int downloadBytes, int uploadBytes, int durationMs,
-      {int rssBytes = 0, int goMemBytes = 0, bool? linkUp, int probeMs = -1}) {
+  void emit(
+    int downloadBytes,
+    int uploadBytes,
+    int durationMs, {
+    int rssBytes = 0,
+    int goMemBytes = 0,
+    bool? linkUp,
+    int probeMs = -1,
+  }) {
     final next = VpnStats.now(
       downloadBytes,
       uploadBytes,

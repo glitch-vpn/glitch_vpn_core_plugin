@@ -135,7 +135,10 @@ class VpnRouting {
             proxy: clean(t.proxy),
           ),
         )
-        .where((t) => t.block.isNotEmpty || t.direct.isNotEmpty || t.proxy.isNotEmpty)
+        .where(
+          (t) =>
+              t.block.isNotEmpty || t.direct.isNotEmpty || t.proxy.isNotEmpty,
+        )
         .toList();
 
     if (mode.isNotEmpty) opts['routingMode'] = mode;
@@ -168,7 +171,12 @@ List<String> balancerStrategiesFor(VpnEngine engine) {
     case VpnEngine.xray:
       return const ['leastping', 'random', 'roundrobin'];
     case VpnEngine.mihomo:
-      return const ['url-test', 'fallback', 'load-balance', 'load-balance-hash'];
+      return const [
+        'url-test',
+        'fallback',
+        'load-balance',
+        'load-balance-hash',
+      ];
     case VpnEngine.awg:
       return const ['leastping', 'random', 'fallback'];
   }
@@ -191,13 +199,34 @@ List<String> fingerprintsFor(VpnEngine engine) {
   switch (engine) {
     case VpnEngine.xray:
       return const [
-        'chrome', 'firefox', 'safari', 'ios', 'android', 'edge',
-        '360', 'qq', 'random', 'randomized', 'randomizednoalpn', 'unsafe',
+        'chrome',
+        'firefox',
+        'safari',
+        'ios',
+        'android',
+        'edge',
+        '360',
+        'qq',
+        'random',
+        'randomized',
+        'randomizednoalpn',
+        'unsafe',
       ];
     case VpnEngine.mihomo:
       return const [
-        'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq',
-        'random', 'randomized', 'chrome120', 'firefox120', 'safari16',
+        'chrome',
+        'firefox',
+        'safari',
+        'ios',
+        'android',
+        'edge',
+        '360',
+        'qq',
+        'random',
+        'randomized',
+        'chrome120',
+        'firefox120',
+        'safari16',
       ];
     case VpnEngine.awg:
       return const [];
@@ -437,8 +466,7 @@ class GlitchVpnCore {
   static String _activeProxyPass = '';
 
   /// Active proxy-mode SOCKS creds, or null. Random unless [proxyUser]/[proxyPass] set.
-  ({String user, String pass})? get proxyCredentials =>
-      _activeProxyUser.isEmpty
+  ({String user, String pass})? get proxyCredentials => _activeProxyUser.isEmpty
       ? null
       : (user: _activeProxyUser, pass: _activeProxyPass);
 
@@ -498,7 +526,10 @@ class GlitchVpnCore {
       }
       // Before InitializeController (reads GLITCH_PPROF_ADDR).
       if (kDebugMode) {
-        GlitchVpnCoreFfi.instance.setEnvVar('GLITCH_PPROF_ADDR', '127.0.0.1:6060');
+        GlitchVpnCoreFfi.instance.setEnvVar(
+          'GLITCH_PPROF_ADDR',
+          '127.0.0.1:6060',
+        );
       }
       await GlitchVpnCoreFfi.instance.initialize();
       _ffiReady = true;
@@ -660,11 +691,7 @@ class GlitchVpnCore {
       if (line.toLowerCase().startsWith('dns')) {
         final idx = line.indexOf('=');
         if (idx == -1) continue;
-        final val = line
-            .substring(idx + 1)
-            .split(RegExp('[, ;]'))
-            .first
-            .trim();
+        final val = line.substring(idx + 1).split(RegExp('[, ;]')).first.trim();
         if (val.isNotEmpty) return val;
       }
     }
@@ -680,8 +707,7 @@ class GlitchVpnCore {
     _activeProxyPass = '';
     try {
       await stopTunnel();
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<void> updateNotification({
@@ -1018,7 +1044,9 @@ class GlitchVpnCore {
     );
 
     final opts = <String, String>{...?routing?.toOpts()};
-    if (balancerStrategy.isNotEmpty) opts['balancerStrategy'] = balancerStrategy;
+    if (balancerStrategy.isNotEmpty) {
+      opts['balancerStrategy'] = balancerStrategy;
+    }
     // Legacy alias: bypassCountries → direct geoip:<cc>, unless routing already
     // supplied direct rules (flat or tiered).
     if (bypassCountries.isNotEmpty &&
@@ -1064,7 +1092,10 @@ class GlitchVpnCore {
     if (res == 0) {
       _activeTunnel = 'xray';
     } else {
-      VpnStatusChannel.instance.emit(VpnStatus.error, reason: 'EngineStart=$res');
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: 'EngineStart=$res',
+      );
       throw PlatformException(
         code: 'XRAY_START_FAILED',
         message: 'EngineStart(xray)=$res',
@@ -1186,7 +1217,10 @@ class GlitchVpnCore {
     if (res == 0) {
       _activeTunnel = 'awg';
     } else {
-      VpnStatusChannel.instance.emit(VpnStatus.error, reason: 'EngineStart=$res');
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: 'EngineStart=$res',
+      );
       throw PlatformException(
         code: 'AWG_START_FAILED',
         message: 'EngineStart(awg)=$res',
@@ -1258,7 +1292,9 @@ class GlitchVpnCore {
     }
 
     final opts = <String, String>{...?routing?.toOpts()};
-    if (balancerStrategy.isNotEmpty) opts['balancerStrategy'] = balancerStrategy;
+    if (balancerStrategy.isNotEmpty) {
+      opts['balancerStrategy'] = balancerStrategy;
+    }
     // connect() already trimmed and validated it.
     if (geoAssetsDir.isNotEmpty) opts['geoAssetsDir'] = geoAssetsDir;
     if (proxyMode) {
@@ -1294,7 +1330,10 @@ class GlitchVpnCore {
     if (res == 0) {
       _activeTunnel = 'mihomo';
     } else {
-      VpnStatusChannel.instance.emit(VpnStatus.error, reason: 'EngineStart=$res');
+      VpnStatusChannel.instance.emit(
+        VpnStatus.error,
+        reason: 'EngineStart=$res',
+      );
       throw PlatformException(
         code: 'MIHOMO_START_FAILED',
         message: 'EngineStart(mihomo)=$res',
@@ -1431,16 +1470,12 @@ class GlitchVpnCore {
           final durationMs = (stats is Map)
               ? stats['durationMs'] as int? ?? 0
               : 0;
-          final rssBytes = (stats is Map)
-              ? stats['rssBytes'] as int? ?? 0
-              : 0;
+          final rssBytes = (stats is Map) ? stats['rssBytes'] as int? ?? 0 : 0;
           final goMemBytes = (stats is Map)
               ? stats['goMemBytes'] as int? ?? 0
               : 0;
           final linkUp = (stats is Map) ? stats['linkUp'] as bool? : null;
-          final probeMs = (stats is Map)
-              ? stats['probeMs'] as int? ?? -1
-              : -1;
+          final probeMs = (stats is Map) ? stats['probeMs'] as int? ?? -1 : -1;
           VpnStatsChannel.instance.emit(
             rx,
             tx,
@@ -1450,8 +1485,7 @@ class GlitchVpnCore {
             linkUp: linkUp,
             probeMs: probeMs,
           );
-        } catch (_) {
-        }
+        } catch (_) {}
         break;
       case GlitchVpnCoreFfiEventCode.connEvent:
         final conn = VpnConnEvent.tryParse(msg as String);
@@ -1654,13 +1688,17 @@ class GlitchVpnCore {
     try {
       final res = await _ch.invokeMethod('listInstalledApps');
       if (res is List) {
-        return res.whereType<Map>().map((m) {
-          return InstalledApp(
-            name: m['name']?.toString() ?? '',
-            path: m['path']?.toString() ?? '',
-            process: m['process']?.toString() ?? '',
-          );
-        }).where((a) => a.process.isNotEmpty).toList();
+        return res
+            .whereType<Map>()
+            .map((m) {
+              return InstalledApp(
+                name: m['name']?.toString() ?? '',
+                path: m['path']?.toString() ?? '',
+                process: m['process']?.toString() ?? '',
+              );
+            })
+            .where((a) => a.process.isNotEmpty)
+            .toList();
       }
     } catch (_) {}
     return const [];
@@ -1726,8 +1764,7 @@ void glitchVpnCoreBackgroundDisconnect() async {
   try {
     await GlitchVpnCore.initialize();
     await GlitchVpnCore.instance.disconnect();
-  } catch (_) {
-  }
+  } catch (_) {}
 }
 
 class AndroidAppInfo {

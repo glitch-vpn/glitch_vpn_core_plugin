@@ -67,11 +67,14 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _proxyRulesCtrl = TextEditingController();
   final _blockRulesCtrl = TextEditingController();
   // Extra routing tiers below tier 1 (the three fields above).
-  final List<({
-    TextEditingController block,
-    TextEditingController direct,
-    TextEditingController proxy,
-  })> _extraTiers = [];
+  final List<
+    ({
+      TextEditingController block,
+      TextEditingController direct,
+      TextEditingController proxy,
+    })
+  >
+  _extraTiers = [];
   final _geoAssetsDirCtrl = TextEditingController();
   final _dnsServersCtrl = TextEditingController(text: '1.1.1.1');
   final _fakeIpFilterCtrl = TextEditingController();
@@ -181,11 +184,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
     }
   }
 
-  List<String> _csv(String s) => s
-      .split(',')
-      .map((e) => e.trim())
-      .where((e) => e.isNotEmpty)
-      .toList();
+  List<String> _csv(String s) =>
+      s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
   // One `name=ip1,ip2` entry per line; `=` because keys carry `:` prefixes.
   Map<String, List<String>> _hosts(String s) {
@@ -547,7 +547,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 onPressed: () => setState(() {
                   final t = _configCtrl.text.trim();
                   if (t.isNotEmpty && !t.startsWith('awg://')) {
-                    _configCtrl.text = 'awg://${base64Url.encode(utf8.encode(t))}';
+                    _configCtrl.text =
+                        'awg://${base64Url.encode(utf8.encode(t))}';
                   }
                 }),
                 child: const Text('→awg://'),
@@ -577,9 +578,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 value: _balancerStrategy,
                 items: [
                   const DropdownMenuItem(value: '', child: Text('default')),
-                  ...balancerStrategiesFor(_engine).map(
-                    (s) => DropdownMenuItem(value: s, child: Text(s)),
-                  ),
+                  ...balancerStrategiesFor(
+                    _engine,
+                  ).map((s) => DropdownMenuItem(value: s, child: Text(s))),
                 ],
                 onChanged: (v) => setState(() => _balancerStrategy = v!),
               ),
@@ -599,10 +600,13 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 DropdownButton<String>(
                   value: _fingerprint,
                   items: [
-                    const DropdownMenuItem(value: '', child: Text('(link default)')),
-                    ...fingerprintsFor(_engine).map(
-                      (f) => DropdownMenuItem(value: f, child: Text(f)),
+                    const DropdownMenuItem(
+                      value: '',
+                      child: Text('(link default)'),
                     ),
+                    ...fingerprintsFor(
+                      _engine,
+                    ).map((f) => DropdownMenuItem(value: f, child: Text(f))),
                   ],
                   onChanged: (v) => setState(() => _fingerprint = v!),
                 ),
@@ -719,7 +723,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                     final port = _proxyPortCtrl.text.trim();
                     final String url;
                     if (!_proxyAuth) {
-                      url = 'socks5://127.0.0.1:$port - no auth (open to local apps)';
+                      url =
+                          'socks5://127.0.0.1:$port - no auth (open to local apps)';
                     } else if (creds != null) {
                       url =
                           'socks5://${creds.user}:${creds.pass}@127.0.0.1:$port';
@@ -786,11 +791,26 @@ class _CoreTestPageState extends State<CoreTestPage> {
           ),
           const Padding(
             padding: EdgeInsets.only(top: 6),
-            child: Text('Tier 1', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            child: Text(
+              'Tier 1',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            ),
           ),
-          _geoField('direct (bypass VPN)', _directRulesCtrl, 'domain:gov.ru, geoip:ru'),
-          _geoField('proxy (force via VPN)', _proxyRulesCtrl, 'domain:youtube.com, geosite:youtube'),
-          _geoField('block (drop)', _blockRulesCtrl, 'domain:ads.example, geosite:category-ads-all'),
+          _geoField(
+            'direct (bypass VPN)',
+            _directRulesCtrl,
+            'domain:gov.ru, geoip:ru',
+          ),
+          _geoField(
+            'proxy (force via VPN)',
+            _proxyRulesCtrl,
+            'domain:youtube.com, geosite:youtube',
+          ),
+          _geoField(
+            'block (drop)',
+            _blockRulesCtrl,
+            'domain:ads.example, geosite:category-ads-all',
+          ),
           for (var i = 0; i < _extraTiers.length; i++)
             Card(
               margin: const EdgeInsets.only(top: 8),
@@ -849,10 +869,13 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 DropdownButton<String>(
                   value: _domainStrategy,
                   items: [
-                    const DropdownMenuItem(value: '', child: Text('default (asis)')),
-                    ...domainStrategiesFor(_engine).map(
-                      (s) => DropdownMenuItem(value: s, child: Text(s)),
+                    const DropdownMenuItem(
+                      value: '',
+                      child: Text('default (asis)'),
                     ),
+                    ...domainStrategiesFor(
+                      _engine,
+                    ).map((s) => DropdownMenuItem(value: s, child: Text(s))),
                   ],
                   onChanged: (v) => setState(() => _domainStrategy = v!),
                 ),
@@ -937,7 +960,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                 onChanged: (v) => setState(() => _sniffing = v ?? true),
               ),
               const Tooltip(
-                message: 'Recover domains from TLS/HTTP/QUIC for flows that '
+                message:
+                    'Recover domains from TLS/HTTP/QUIC for flows that '
                     'bypass our DNS (in-app DoH, hardcoded IPs). With '
                     'dns=normal, domain routing does not work without it.',
                 child: Text('sniffing'),
@@ -967,8 +991,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
               GlitchVpnCore.instance
                   .appIcons(apps.map((a) => a.path).toList())
                   .then((m) {
-                if (m.isNotEmpty && ctx.mounted) setInner(() => icons.addAll(m));
-              });
+                    if (m.isNotEmpty && ctx.mounted) {
+                      setInner(() => icons.addAll(m));
+                    }
+                  });
             }
             return AlertDialog(
               title: const Text('Pick an application'),
@@ -987,9 +1013,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
                       onChanged: (q) => setInner(() {
                         final lq = q.toLowerCase();
                         filtered = apps
-                            .where((a) =>
-                                a.name.toLowerCase().contains(lq) ||
-                                a.process.toLowerCase().contains(lq))
+                            .where(
+                              (a) =>
+                                  a.name.toLowerCase().contains(lq) ||
+                                  a.process.toLowerCase().contains(lq),
+                            )
                             .toList();
                       }),
                     ),
@@ -1004,9 +1032,12 @@ class _CoreTestPageState extends State<CoreTestPage> {
                                 ? Image.memory(icon, width: 24, height: 24)
                                 : const Icon(Icons.apps, size: 24),
                             title: Text(filtered[i].name),
-                            subtitle: Text(filtered[i].process,
-                                style: const TextStyle(fontSize: 11)),
-                            onTap: () => Navigator.pop(ctx, filtered[i].process),
+                            subtitle: Text(
+                              filtered[i].process,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            onTap: () =>
+                                Navigator.pop(ctx, filtered[i].process),
                           );
                         },
                       ),
@@ -1014,21 +1045,21 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   ],
                 ),
               ),
-            actions: [
-              TextButton(
-                child: const Text('Browse .exe…'),
-                onPressed: () async {
-                  final exe = await GlitchVpnCore.instance.pickExecutable();
-                  if (ctx.mounted) Navigator.pop(ctx, exe);
-                },
-              ),
-              TextButton(
-                child: const Text('Cancel'),
-                onPressed: () => Navigator.pop(ctx, null),
-              ),
-            ],
-          );
-        }
+              actions: [
+                TextButton(
+                  child: const Text('Browse .exe…'),
+                  onPressed: () async {
+                    final exe = await GlitchVpnCore.instance.pickExecutable();
+                    if (ctx.mounted) Navigator.pop(ctx, exe);
+                  },
+                ),
+                TextButton(
+                  child: const Text('Cancel'),
+                  onPressed: () => Navigator.pop(ctx, null),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -1068,10 +1099,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
         children: [
           Row(
             children: [
-              const Text(
-                'DNS',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              const Text('DNS', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(width: 12),
               DropdownButton<VpnDnsMode>(
                 value: _dnsMode,
@@ -1190,7 +1218,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
                       setState(() => _resolveExternalIp = v ?? true),
                 ),
                 const Tooltip(
-                  message: 'Fetch the external IPv4/IPv6 through the tunnel '
+                  message:
+                      'Fetch the external IPv4/IPv6 through the tunnel '
                       'after link-up (IPEvent).',
                   child: Text('external IP'),
                 ),
@@ -1341,13 +1370,23 @@ class _CoreTestPageState extends State<CoreTestPage> {
                       : (c.outbound == 'direct' ? Colors.orange : Colors.green);
                   return Row(
                     children: [
-                      Container(width: 8, height: 8, margin: const EdgeInsets.only(right: 6),
-                        decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(right: 6),
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
                       Expanded(
                         child: Text(
                           '${c.network} ${c.host}:${c.port}  →  ${c.outbound}'
                           '${c.rule.isNotEmpty ? '  (${c.rule})' : ''}',
-                          style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -1369,10 +1408,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
         children: [
           Row(
             children: [
-              const Text(
-                'Logs',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              const Text('Logs', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(width: 8),
               DropdownButton<int>(
                 value: _verbosity,
@@ -1392,11 +1428,23 @@ class _CoreTestPageState extends State<CoreTestPage> {
               DropdownButton<MemoryLimit>(
                 value: _memoryLimit,
                 items: const [
-                  DropdownMenuItem(value: MemoryLimit.unlimited, child: Text('∞')),
+                  DropdownMenuItem(
+                    value: MemoryLimit.unlimited,
+                    child: Text('∞'),
+                  ),
                   DropdownMenuItem(value: MemoryLimit.mb64, child: Text('64M')),
-                  DropdownMenuItem(value: MemoryLimit.mb128, child: Text('128M')),
-                  DropdownMenuItem(value: MemoryLimit.mb256, child: Text('256M')),
-                  DropdownMenuItem(value: MemoryLimit.mb512, child: Text('512M')),
+                  DropdownMenuItem(
+                    value: MemoryLimit.mb128,
+                    child: Text('128M'),
+                  ),
+                  DropdownMenuItem(
+                    value: MemoryLimit.mb256,
+                    child: Text('256M'),
+                  ),
+                  DropdownMenuItem(
+                    value: MemoryLimit.mb512,
+                    child: Text('512M'),
+                  ),
                 ],
                 onChanged: (v) {
                   setState(() => _memoryLimit = v!);
@@ -1407,12 +1455,16 @@ class _CoreTestPageState extends State<CoreTestPage> {
               // File logging OFF by default; toggle mirrors log lines to a temp
               // file (getLogFilePath / clearLogFile via the plugin).
               IconButton(
-                tooltip: _fileLog ? 'File logging ON - tap path to view' : 'Log to file',
+                tooltip: _fileLog
+                    ? 'File logging ON - tap path to view'
+                    : 'Log to file',
                 visualDensity: VisualDensity.compact,
                 icon: Icon(_fileLog ? Icons.save : Icons.save_outlined),
                 color: _fileLog ? Colors.green : null,
                 onPressed: () async {
-                  await GlitchVpnCore.instance.configureLogging(toFile: !_fileLog);
+                  await GlitchVpnCore.instance.configureLogging(
+                    toFile: !_fileLog,
+                  );
                   if (mounted) setState(() => _fileLog = !_fileLog);
                 },
               ),
@@ -1424,7 +1476,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   final path = await GlitchVpnCore.instance.getLogFilePath();
                   if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(path ?? 'file logging not enabled yet')),
+                    SnackBar(
+                      content: Text(path ?? 'file logging not enabled yet'),
+                    ),
                   );
                 },
               ),
@@ -1444,7 +1498,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
               hintText: 'filter logs…',
             ),
             style: const TextStyle(fontSize: 12),
-            onChanged: (v) => setState(() => _logFilter = v.trim().toLowerCase()),
+            onChanged: (v) =>
+                setState(() => _logFilter = v.trim().toLowerCase()),
           ),
           const SizedBox(height: 4),
           SizedBox(
