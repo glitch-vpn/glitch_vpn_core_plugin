@@ -788,7 +788,6 @@ class GlitchVpnCore {
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
-    String bypassCountries = '',
     String balancerStrategy = '',
     VpnRouting? routing,
     VpnDns? dns,
@@ -890,7 +889,6 @@ class GlitchVpnCore {
             logLevel: logLevel,
             splitTunnelingType: splitTunnelingType,
             splitTunnelingApps: splitTunnelingApps,
-            bypassCountries: bypassCountries,
             balancerStrategy: balancerStrategy,
             routing: routing,
             dns: dns,
@@ -963,7 +961,6 @@ class GlitchVpnCore {
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
-    String bypassCountries = '',
     String balancerStrategy = '',
     VpnRouting? routing,
   }) async {
@@ -974,7 +971,6 @@ class GlitchVpnCore {
         logLevel: logLevel,
         splitTunnelingType: splitTunnelingType,
         splitTunnelingApps: splitTunnelingApps,
-        bypassCountries: bypassCountries,
         balancerStrategy: balancerStrategy,
         routing: routing,
       );
@@ -1037,7 +1033,6 @@ class GlitchVpnCore {
     int? logLevel,
     SplitTunnelingType? splitTunnelingType,
     List<String>? splitTunnelingApps,
-    String bypassCountries = '',
     String balancerStrategy = '',
     VpnRouting? routing,
     VpnDns? dns,
@@ -1094,11 +1089,6 @@ class GlitchVpnCore {
     final opts = <String, String>{...?routing?.toOpts()};
     if (balancerStrategy.isNotEmpty) {
       opts['balancerStrategy'] = balancerStrategy;
-    }
-    // Legacy alias: bypassCountries → direct geoip:<cc>; the core ignores it
-    // once routingTiers is set.
-    if (bypassCountries.isNotEmpty && !opts.containsKey('routingTiers')) {
-      opts['bypassCountries'] = bypassCountries;
     }
     // connect() already trimmed and validated both.
     if (geoAssetsDir.isNotEmpty) opts['geoAssetsDir'] = geoAssetsDir;
