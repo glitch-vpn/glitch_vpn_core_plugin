@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     companion object {
-        private const val CHANNEL_NAME = "glitch_vpn_core"
+        const val CHANNEL_NAME = "glitch_vpn_core"
         private const val NOTIF_PERMISSION = "android.permission.POST_NOTIFICATIONS"
         private const val NOTIF_REQ_CODE = 8123
         private const val NOTIF_ONLY_REQ_CODE = 8124
@@ -54,6 +54,14 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 Log.i(TAG, "notifyDisconnectPressed -> invokeMethod(onDisconnectPressed)")
                 ch.invokeMethod("onDisconnectPressed", null)
             }
+        }
+
+        /** Hands a system start to the UI isolate; false when there is none. */
+        fun runSystemStartInUi(): Boolean {
+            if (!isUiAttached()) return false
+            val ch = primaryChannel ?: return false
+            Handler(Looper.getMainLooper()).post { ch.invokeMethod("runSystemStart", null) }
+            return true
         }
 
         fun isUiAttached(): Boolean {
@@ -130,8 +138,9 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         attachedCount = (attachedCount - 1).coerceAtLeast(0)
-        if (primaryChannel == instanceChannel) {
+        if (primaryChannel != null && primaryChannel == instanceChannel) {
             primaryChannel = null
+            GlitchVpnService.onUiDetached()
         }
         instanceChannel?.setMethodCallHandler(null)
         instanceChannel = null
@@ -208,6 +217,32 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     texts = texts,
                 )
                 startVpnService(tunnel, result)
+            }
+
+            "registerSystemStartHandler" -> {
+                val ctx = appContext ?: run { result.success(false); return }
+                PluginPrefs.setSystemStartHandle(ctx, call.argument<Number>("handle")?.toLong())
+                result.success(true)
+            }
+
+            "systemStart" -> {
+                val ctx = appContext ?: run { result.success(null); return }
+                result.success(hashMapOf(
+                    "handle" to PluginPrefs.systemStartHandle(ctx),
+                    "reason" to GlitchVpnService.systemStartReason,
+                ))
+            }
+
+            "declineSystemStart" -> {
+                if (GlitchVpnService.inForeground) {
+                    sendServiceAction(GlitchVpnService.ACTION_SYSTEM_START_DECLINED)
+                }
+                result.success(true)
+            }
+
+            "alwaysOn" -> {
+                val state = GlitchVpnService.alwaysOnState()
+                result.success(state?.let { hashMapOf("alwaysOn" to it.first, "lockdown" to it.second) })
             }
 
             "stopTunnel" -> {
@@ -386,6 +421,7 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
 
         val svc = Intent(ctx, GlitchVpnService::class.java).apply {
+            action = GlitchVpnService.ACTION_START
             if (tunnel.addresses != null) putExtra(GlitchVpnService.EXTRA_ADDRESSES, tunnel.addresses)
             if (tunnel.routes != null) putExtra(GlitchVpnService.EXTRA_ROUTES, tunnel.routes)
             if (!tunnel.dns.isNullOrBlank()) putExtra(GlitchVpnService.EXTRA_DNS, tunnel.dns)
@@ -412,7 +448,9 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
         svc.putExtra(GlitchVpnService.EXTRA_RESULT_RECEIVER, receiver)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        // A service in the foreground keeps its process there too: a plain
+        // start reaches it even from a headless isolate.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !GlitchVpnService.inForeground) {
             ContextCompat.startForegroundService(ctx, svc)
         } else {
             ctx.startService(svc)

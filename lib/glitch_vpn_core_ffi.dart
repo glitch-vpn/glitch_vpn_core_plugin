@@ -121,6 +121,13 @@ class GlitchVpnCoreFfi {
     initCtl();
   }
 
+  /// Points the core's events back at this isolate, which registered before
+  /// another isolate took them over; the core replays the live session.
+  void reclaimStatus() {
+    final port = _statusPort;
+    if (port != null) _registerStatusPort(port.sendPort.nativePort);
+  }
+
   void registerStatus(void Function(int, String) cb) {
     _statusCallback = cb;
     if (_statusPort != null) return;

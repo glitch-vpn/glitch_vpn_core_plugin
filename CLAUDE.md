@@ -106,6 +106,11 @@ wiki/                         # user-facing docs (GitHub wiki page names);
   from the VPN (`addDisallowedApplication`), so in-app HTTP does **not**
   traverse the tunnel — external-IP resolution happens core-side for this
   reason.
+- Android starts the VpnService by itself (always-on, a sticky restart after
+  the process died). That start never establishes a TUN: the app's
+  system-start handler (`registerSystemStartHandler`) connects in a headless
+  isolate, or the service stops. A TUN with no engine behind it is a
+  black hole, worse under lockdown.
 - Unit tests never load the native library; anything end-to-end lives in the
   core repo's `internal/smoke`.
 

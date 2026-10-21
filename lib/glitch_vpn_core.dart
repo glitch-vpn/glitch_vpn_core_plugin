@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' show CallbackHandle, DartPluginRegistrant, PluginUtilities;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
@@ -84,6 +85,33 @@ class VpnNotificationTexts {
 }
 
 enum VpnEngine { xray, awg, mihomo }
+
+/// Why Android started the tunnel with no app session behind it.
+enum VpnSystemStart {
+  /// Always-on: at boot, when switched on, or after the app was updated.
+  alwaysOn,
+
+  /// A restart after the app's process died with the tunnel up.
+  restart,
+}
+
+/// Android's always-on VPN setting for this app (Android 10 and later).
+/// [lockdown] blocks the device's traffic whenever the tunnel is down.
+class VpnAlwaysOn {
+  final bool enabled;
+  final bool lockdown;
+
+  const VpnAlwaysOn({required this.enabled, required this.lockdown});
+
+  /// Null for anything but `{alwaysOn: bool, lockdown: bool}`.
+  static VpnAlwaysOn? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final enabled = raw['alwaysOn'];
+    final lockdown = raw['lockdown'];
+    if (enabled is! bool || lockdown is! bool) return null;
+    return VpnAlwaysOn(enabled: enabled, lockdown: lockdown);
+  }
+}
 
 enum SplitTunnelingType { whitelist, blacklist }
 
@@ -502,6 +530,86 @@ class GlitchVpnCore {
         (_) => _credAlphabet.codeUnitAt(r.nextInt(_credAlphabet.length)),
       ),
     );
+  }
+
+  /// Android: [handler] runs when the system starts the tunnel with no app
+  /// session behind it — always-on, at boot or when switched on, or a restart
+  /// after the app's process died. It runs after [initialize], in the UI's
+  /// isolate when one is up and otherwise in a fresh background isolate with
+  /// none of the UI's state: it calls [configure] and
+  /// [registerDisconnectPressedHandler] itself if it needs them. It awaits
+  /// [connect] (with the last selection, say); a handler that returns with no
+  /// engine running declines the start, and the service stops. [handler] must
+  /// be a top-level or static function marked `@pragma('vm:entry-point')`.
+  /// Null unregisters. Registration persists across launches; with none, a
+  /// system start stops at once. Android reports always-on only once the
+  /// tunnel is up, so the handler learns why it runs, and [alwaysOn] the rest.
+  static Future<void> registerSystemStartHandler(
+    Future<void> Function(VpnSystemStart start)? handler,
+  ) async {
+    if (!Platform.isAndroid) return;
+    final int? handle;
+    if (handler == null) {
+      handle = null;
+    } else {
+      handle = PluginUtilities.getCallbackHandle(handler)?.toRawHandle();
+      if (handle == null) {
+        throw ArgumentError.value(
+          handler,
+          'handler',
+          'must be a top-level or static function',
+        );
+      }
+    }
+    await _ch.invokeMethod('registerSystemStartHandler', {'handle': handle});
+  }
+
+  /// Android's always-on setting for this app, read from the running tunnel
+  /// service: null when no tunnel runs, below Android 10, or off Android.
+  static Future<VpnAlwaysOn?> alwaysOn() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return VpnAlwaysOn.tryParse(await _ch.invokeMethod('alwaysOn'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Runs the handler the app registered; a start it leaves without a running
+  // engine is declined, so the service does not hold an empty tunnel.
+  static Future<void> _runSystemStart() async {
+    Map<Object?, Object?>? info;
+    try {
+      info = await _ch.invokeMapMethod<Object?, Object?>('systemStart');
+    } catch (_) {}
+    final handle = info?['handle'];
+    final handler = handle is int
+        ? PluginUtilities.getCallbackFromHandle(
+            CallbackHandle.fromRawHandle(handle),
+          )
+        : null;
+    final start = info?['reason'] == 'restart'
+        ? VpnSystemStart.restart
+        : VpnSystemStart.alwaysOn;
+    if (handler is Future<void> Function(VpnSystemStart)) {
+      try {
+        await initialize();
+        await handler(start);
+      } catch (e) {
+        debugPrint(
+          'GlitchVpnCore: system-start handler failed: ${e.runtimeType}',
+        );
+      }
+    }
+    var running = false;
+    try {
+      running = isRunning();
+    } catch (_) {}
+    if (!running) {
+      try {
+        await _ch.invokeMethod('declineSystemStart');
+      } catch (_) {}
+    }
   }
 
   /// Native disconnect request (e.g. notification). Unset → plugin disconnects.
@@ -1479,6 +1587,15 @@ class GlitchVpnCore {
 
   static Future<void> _onNativeCall(MethodCall call) async {
     switch (call.method) {
+      // The UI that held the core's events is gone; this isolate runs the
+      // session the system started and must hear it end.
+      case 'reclaimStatus':
+        GlitchVpnCoreFfi.instance.reclaimStatus();
+        break;
+      // A system start while this UI isolate holds the core's events.
+      case 'runSystemStart':
+        unawaited(_runSystemStart());
+        break;
       case 'onDisconnectPressed':
         VpnStatusChannel.instance.emit(VpnStatus.disconnecting);
         if (_onDisconnectPressedHandler != null) {
@@ -1879,6 +1996,15 @@ class InstalledApp {
     required this.path,
     required this.process,
   });
+}
+
+/// The service's entry when the system starts the tunnel with no app session;
+/// see [GlitchVpnCore.registerSystemStartHandler].
+@pragma('vm:entry-point')
+Future<void> glitchVpnCoreSystemStart() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  await GlitchVpnCore._runSystemStart();
 }
 
 /// Headless disconnect when the UI isn't running.

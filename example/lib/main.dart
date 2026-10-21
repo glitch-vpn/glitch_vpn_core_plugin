@@ -64,6 +64,26 @@ const _notificationTextsDe = VpnNotificationTexts(
   disconnectAction: 'Trennen',
 );
 
+// Runs when Android starts the tunnel with no app session (always-on, or a
+// restart after the process died). An app connects to the user's last
+// selection here; the example keeps none, so it reconnects to its sample in
+// direct-all, which keeps the device online behind a placeholder server.
+@pragma('vm:entry-point')
+Future<void> exampleSystemStart(VpnSystemStart start) async {
+  debugPrint('system start: ${start.name}');
+  _configureCore();
+  await GlitchVpnCore.instance.connect(
+    engine: VpnEngine.xray,
+    config: _sampleVlessReality,
+    notification: _notificationTexts,
+    routing: const VpnRouting(mode: 'direct-all'),
+  );
+}
+
+// The UI's isolate and a system start's own isolate both start from here.
+void _configureCore() =>
+    GlitchVpnCore.instance.configure(logLevel: 3, dnsAddress: '1.1.1.1');
+
 class CoreTestApp extends StatelessWidget {
   const CoreTestApp({super.key});
 
@@ -136,6 +156,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   StreamSubscription? _connSub;
   StreamSubscription? _serverSub;
   bool _notificationGerman = false;
+  VpnAlwaysOn? _alwaysOn;
   bool _inspector = false;
   String _logFilter = '';
   bool _fileLog = false;
@@ -155,8 +176,9 @@ class _CoreTestPageState extends State<CoreTestPage> {
   Future<void> _init() async {
     await _ensureNotificationPermission();
     await GlitchVpnCore.ensureAdmin();
-    GlitchVpnCore.instance.configure(logLevel: 3, dnsAddress: '1.1.1.1');
+    _configureCore();
     await GlitchVpnCore.initialize();
+    await GlitchVpnCore.registerSystemStartHandler(exampleSystemStart);
     await GlitchVpnCore.setLogsVerbosity(_verbosity);
 
     _logSub = GlitchVpnCore.instance.onLogsChanged.listen((log) {
@@ -219,8 +241,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
       final active = GlitchVpnCore.activeEngine();
       final engines = await GlitchVpnCore.availableEngines();
       final versions = await GlitchVpnCore.getCoreVersions();
+      final alwaysOn = await GlitchVpnCore.alwaysOn();
       if (!mounted) return;
       setState(() {
+        _alwaysOn = alwaysOn;
         _capabilities = caps;
         _versions = versions;
         _activeEngine = active;
@@ -520,6 +544,14 @@ class _CoreTestPageState extends State<CoreTestPage> {
           if (upd.reason != null && upd.reason!.isNotEmpty)
             Text(
               upd.reason!,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          if (Platform.isAndroid)
+            Text(
+              _alwaysOn == null
+                  ? 'always-on: unknown (no tunnel, or before Android 10)'
+                  : 'always-on: ${_alwaysOn!.enabled ? 'on' : 'off'}, '
+                        'lockdown: ${_alwaysOn!.lockdown ? 'on' : 'off'}',
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
           if (Platform.isAndroid)

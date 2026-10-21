@@ -305,6 +305,27 @@ AllowedIPs = 0.0.0.0/0
     });
   });
 
+  group('VpnAlwaysOn.tryParse', () {
+    test("reads the service's answer", () {
+      final a = VpnAlwaysOn.tryParse({'alwaysOn': true, 'lockdown': false});
+      expect(a?.enabled, isTrue);
+      expect(a?.lockdown, isFalse);
+    });
+
+    test('an answer without both switches reads as null', () {
+      expect(
+        VpnAlwaysOn.tryParse({'alwaysOn': null, 'lockdown': null}),
+        isNull,
+      );
+    });
+
+    test('garbage reads as null', () {
+      expect(VpnAlwaysOn.tryParse(null), isNull);
+      expect(VpnAlwaysOn.tryParse('not a map'), isNull);
+      expect(VpnAlwaysOn.tryParse({'alwaysOn': 'yes', 'lockdown': 1}), isNull);
+    });
+  });
+
   group('VpnNotificationTexts', () {
     // The keys are read by NotificationTexts.fromMap on Android.
     test('carries every text under the key the service reads', () {

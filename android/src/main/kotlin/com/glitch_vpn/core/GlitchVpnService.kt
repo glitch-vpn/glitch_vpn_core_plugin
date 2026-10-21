@@ -21,10 +21,13 @@ import java.util.Locale
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
+import io.flutter.plugin.common.MethodChannel
 
 class GlitchVpnService : VpnService() {
 
     companion object {
+        const val ACTION_START      = "com.glitch_vpn.core.ACTION_START"
+        const val ACTION_SYSTEM_START_DECLINED = "com.glitch_vpn.core.ACTION_SYSTEM_START_DECLINED"
         const val ACTION_DISCONNECT = "com.glitch_vpn.core.ACTION_DISCONNECT"
         const val ACTION_FINALIZE   = "com.glitch_vpn.core.ACTION_FINALIZE"
         const val ACTION_UPDATE     = "com.glitch_vpn.core.ACTION_UPDATE"
@@ -54,7 +57,40 @@ class GlitchVpnService : VpnService() {
         @Volatile private var ownerPfd: ParcelFileDescriptor? = null
         @Volatile private var finalized: Boolean = false
         @Volatile private var headlessEngine: FlutterEngine? = null
+        // Runs the app's system-start handler and stays for the session it
+        // starts: the tunnel it opened is torn down by that isolate's Dart.
+        @Volatile private var systemStartEngine: FlutterEngine? = null
         @Volatile private var wakeLock: android.os.PowerManager.WakeLock? = null
+        @Volatile private var instance: GlitchVpnService? = null
+
+        /** Why the system started the service: "alwaysOn" or "restart". */
+        @Volatile var systemStartReason: String? = null
+            private set
+
+        /** The service is up and in the foreground, so a plain start reaches it from anywhere. */
+        @Volatile var inForeground: Boolean = false
+            private set
+
+        private fun channelOf(engine: FlutterEngine) =
+            MethodChannel(engine.dartExecutor.binaryMessenger, GlitchVpnCorePlugin.CHANNEL_NAME)
+
+        /** The UI's engine is gone: the system-start isolate takes the core's events back. */
+        fun onUiDetached() {
+            val engine = systemStartEngine ?: return
+            Handler(Looper.getMainLooper()).post {
+                channelOf(engine).invokeMethod("reclaimStatus", null)
+            }
+        }
+
+        /**
+         * (always-on, lockdown) while a tunnel runs; null with none or below
+         * Android 10. Android answers only once the tunnel is up.
+         */
+        fun alwaysOnState(): Pair<Boolean, Boolean>? {
+            val svc = instance ?: return null
+            if (ownerPfd == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+            return svc.isAlwaysOn to svc.isLockdownEnabled
+        }
 
         // Resolves the JNI symbol; Dart's dlopen maps the same in-process copy,
         // so this reads the live engine's counters (one Go runtime).
@@ -87,11 +123,16 @@ class GlitchVpnService : VpnService() {
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         Log.i(TAG, "onStartCommand action=$action")
 
-        if (action == null || action == ACTION_UPDATE) { // ACTION_UPDATE also keeps the lock held
+        if (action == ACTION_START || action == ACTION_UPDATE) { // ACTION_UPDATE also keeps the lock held
              synchronized(this) {
                  if (wakeLock == null) {
                      val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
@@ -110,8 +151,110 @@ class GlitchVpnService : VpnService() {
             ACTION_DISCONNECTING -> handleActionDisconnecting()
             ACTION_FINALIZE   -> handleActionFinalize()
             ACTION_UPDATE     -> handleActionUpdate(intent)
-            else              -> handleActionStart(intent)
+            ACTION_START      -> handleActionStart(intent)
+            ACTION_SYSTEM_START_DECLINED -> handleSystemStartDeclined()
+            // The system's own start (always-on, android.net.VpnService) or a
+            // sticky restart after the process died (null intent): no session
+            // was asked for, and no engine is running in this process.
+            else              -> handleSystemStart(if (intent == null) "restart" else "alwaysOn")
         }
+    }
+
+    private fun handleSystemStart(reason: String): Int {
+        if (ownerPfd != null) {
+            Log.i(TAG, "System start over a live tunnel: nothing to do")
+            return Service.START_STICKY
+        }
+        disconnecting = false
+        phase = Phase.CONNECTING
+        connectedSinceMs = 0L
+        countryLine = ""
+        statsLine = ""
+        texts = texts ?: PluginPrefs.notificationTexts(this)
+        systemStartReason = reason
+        try {
+            startAsForeground()
+        } catch (t: Throwable) {
+            // A restart from the background may not go foreground (Android 12+).
+            Log.w(TAG, "System start could not go foreground: ${t.message}")
+            stopSelf()
+            return Service.START_NOT_STICKY
+        }
+
+        if (PluginPrefs.systemStartHandle(this) == null) {
+            Log.i(TAG, "System start with no handler registered: stopping")
+            stopWithoutTunnel()
+            return Service.START_NOT_STICKY
+        }
+        // A UI isolate already holds the core's events: the handler runs there.
+        if (!GlitchVpnCorePlugin.runSystemStartInUi()) startSystemStartEngine()
+        // A handler that neither connects nor returns must not hold the
+        // service (and, under lockdown, the device's traffic) forever.
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (ownerPfd == null && instance == this) {
+                Log.w(TAG, "System start: no tunnel after 60s, stopping")
+                stopWithoutTunnel()
+            }
+        }, 60_000)
+        return Service.START_NOT_STICKY
+    }
+
+    private fun handleSystemStartDeclined(): Int {
+        if (ownerPfd == null) {
+            Log.i(TAG, "System start declined by the app: stopping")
+            stopWithoutTunnel()
+        }
+        return Service.START_NOT_STICKY
+    }
+
+    private fun leaveForeground() {
+        inForeground = false
+        try { stopForeground(Service.STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
+    }
+
+    private fun stopWithoutTunnel() {
+        destroySystemStartEngine()
+        leaveForeground()
+        stopSelf()
+    }
+
+    private fun startSystemStartEngine() {
+        if (systemStartEngine != null) return
+        systemStartEngine = startHeadlessEngine("glitchVpnCoreSystemStart") ?: run {
+            stopWithoutTunnel()
+            return
+        }
+    }
+
+    // Both headless entries live in the plugin's library. The engine registers
+    // the app's plugins too, so a handler can read the app's own storage.
+    private fun startHeadlessEngine(entrypoint: String): FlutterEngine? {
+        var engine: FlutterEngine? = null
+        return try {
+            val appCtx = applicationContext
+            val loader = FlutterInjector.instance().flutterLoader()
+            loader.startInitialization(appCtx)
+            loader.ensureInitializationComplete(appCtx, null)
+            engine = FlutterEngine(appCtx)
+            engine.dartExecutor.executeDartEntrypoint(
+                DartExecutor.DartEntrypoint(
+                    loader.findAppBundlePath(),
+                    "package:glitch_vpn_core/glitch_vpn_core.dart",
+                    entrypoint
+                )
+            )
+            engine
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to start the headless engine $entrypoint: ${t.message}")
+            try { engine?.destroy() } catch (_: Throwable) {}
+            null
+        }
+    }
+
+    private fun destroySystemStartEngine() {
+        val engine = systemStartEngine ?: return
+        systemStartEngine = null
+        try { engine.destroy() } catch (_: Throwable) {}
     }
 
     private fun startAsForeground(): Int {
@@ -121,12 +264,14 @@ class GlitchVpnService : VpnService() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
                 // Android 14+: SPECIAL_USE is required for VPN services
                 startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                inForeground = true
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             }
             else -> {
                 // Android 10-13 and below: don't specify foregroundServiceType
                 // (SPECIAL_USE constant doesn't exist pre-API 34, and manifest only declares specialUse)
                 startForeground(NOTIF_ID, n)
+                inForeground = true
                 0
             }
         }
@@ -312,7 +457,10 @@ class GlitchVpnService : VpnService() {
         connectedSinceMs = 0L
         countryLine = ""
         statsLine = ""
-        texts = NotificationTexts.fromBundle(intent?.getBundleExtra(EXTRA_NOTIFICATION_TEXTS)) ?: texts
+        NotificationTexts.fromBundle(intent?.getBundleExtra(EXTRA_NOTIFICATION_TEXTS))?.let {
+            texts = it
+            PluginPrefs.setNotificationTexts(this, it)
+        }
         startAsForeground()
 
         val builder = Builder()
@@ -457,11 +605,16 @@ class GlitchVpnService : VpnService() {
         // If the UI is attached (Dart is running), the notifyDisconnectPressed
         // channel above already drove the disconnect. Do NOT start the headless
         // engine then - it's heavy, blocks the main thread, and causes an ANR.
-        if (!GlitchVpnCorePlugin.isUiAttached()) {
+        val sessionEngine = systemStartEngine
+        if (GlitchVpnCorePlugin.isUiAttached()) {
+            Log.i(TAG, "UI attached -> skipping headless disconnect to avoid ANR")
+        } else if (sessionEngine != null) {
+            // The isolate that connected is still listening: it disconnects.
+            Log.i(TAG, "UI detached -> system-start engine disconnects")
+            channelOf(sessionEngine).invokeMethod("onDisconnectPressed", null)
+        } else {
             Log.i(TAG, "UI detached -> starting headless disconnect")
             startHeadlessDisconnect()
-        } else {
-            Log.i(TAG, "UI attached -> skipping headless disconnect to avoid ANR")
         }
 
         finalizeIfStuck(source, safetyDelayMs)
@@ -485,43 +638,15 @@ class GlitchVpnService : VpnService() {
             Log.i(TAG, "Headless engine already running")
             return
         }
-        try {
-            val appCtx = applicationContext
-            val loader = FlutterInjector.instance().flutterLoader()
-            loader.startInitialization(appCtx)
-            loader.ensureInitializationComplete(appCtx, null)
+        headlessEngine = startHeadlessEngine("glitchVpnCoreBackgroundDisconnect") ?: return
 
-            val engine = FlutterEngine(appCtx)
-            engine.plugins.add(GlitchVpnCorePlugin())
-
-            val entrypoint = try {
-                // Newer API: (bundlePath, libraryUri, functionName)
-                DartExecutor.DartEntrypoint(
-                    loader.findAppBundlePath(),
-                    "package:glitch_vpn_core/glitch_vpn_core.dart",
-                    "glitchVpnCoreBackgroundDisconnect"
-                )
-            } catch (_: NoSuchMethodError) {
-                // Older API: (bundlePath, functionName) - function must be reachable from root
-                DartExecutor.DartEntrypoint(
-                    loader.findAppBundlePath(),
-                    "glitchVpnCoreBackgroundDisconnect"
-                )
-            }
-            engine.dartExecutor.executeDartEntrypoint(entrypoint)
-
-            headlessEngine = engine
-
-            // Auto-clean the engine after a timeout so it doesn't linger in memory.
-            Handler(Looper.getMainLooper()).postDelayed({
-                try {
-                    headlessEngine?.destroy()
-                } catch (_: Throwable) {}
-                headlessEngine = null
-            }, 15000)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to start headless FlutterEngine: ${t.message}")
-        }
+        // Auto-clean the engine after a timeout so it doesn't linger in memory.
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                headlessEngine?.destroy()
+            } catch (_: Throwable) {}
+            headlessEngine = null
+        }, 15000)
     }
 
     private fun handleActionUpdate(intent: Intent?): Int {
@@ -535,6 +660,7 @@ class GlitchVpnService : VpnService() {
         val newTexts = NotificationTexts.fromBundle(intent?.getBundleExtra(EXTRA_NOTIFICATION_TEXTS))
         if (newTexts != null) {
             texts = newTexts
+            PluginPrefs.setNotificationTexts(this, newTexts)
             createNotificationChannel()
         }
         intent?.getStringExtra(EXTRA_COUNTRY_LINE)?.let { countryLine = it }
@@ -573,13 +699,17 @@ class GlitchVpnService : VpnService() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIF_ID)
         } catch (_: Throwable) {}
-        try { stopForeground(Service.STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
+        leaveForeground()
+        destroySystemStartEngine()
         stopSelf()
         return Service.START_NOT_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        if (instance == this) instance = null
+        inForeground = false
+        destroySystemStartEngine()
         stopKeepAliveUpdates()
         Log.i(TAG, "onDestroy finalized=$finalized")
         if (!finalized) {

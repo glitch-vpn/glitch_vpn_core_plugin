@@ -114,6 +114,32 @@ app's: `connect(notification: VpnNotificationTexts(...))` carries them, and
 The whole app package is excluded from the VPN, so in-app HTTP does not
 traverse the tunnel — this is why the exit IP is resolved core-side.
 
+Android also starts the tunnel by itself: always-on (at boot, when the user
+switches it on, after an app update) and a restart after the app's process
+died. No app session asked for that tunnel, so the plugin hands it to the
+handler the app registered, which reconnects or declines:
+
+```dart
+@pragma('vm:entry-point')
+Future<void> onSystemStart(VpnSystemStart start) async {
+  // A background isolate, no UI: read the last selection, then connect.
+  await GlitchVpnCore.instance.connect(
+    engine: engine,
+    config: link,
+    notification: texts,
+  );
+}
+
+await GlitchVpnCore.registerSystemStartHandler(onSystemStart);   // once, at startup
+```
+
+The handler runs in the UI's isolate when one is up, and otherwise in a fresh
+one with none of the UI's state, so it calls `configure()` itself. With no
+handler registered, or one that returns without connecting, the service stops
+instead of holding a tunnel with no engine behind it.
+`GlitchVpnCore.alwaysOn()` reads the always-on and lockdown switches while a
+tunnel runs.
+
 **Windows.** TUN mode needs elevation. `ensureAdmin()` first looks for the
 `GlitchVpnCore` system service that the core release ships: with it installed,
 the tunnel runs without a UAC prompt; without it, the process relaunches
