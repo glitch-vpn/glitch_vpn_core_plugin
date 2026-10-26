@@ -127,6 +127,11 @@ class GlitchVpnService : VpnService() {
     private var statsLine: String = ""
     @Volatile private var disconnecting: Boolean = false
 
+    // Delayed callbacks act only for the session that posted them.
+    private val sessions = SessionGeneration()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var stuckDisconnectCallback: Runnable? = null
+
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onCreate() {
@@ -171,6 +176,7 @@ class GlitchVpnService : VpnService() {
             Log.i(TAG, "System start over a live tunnel: nothing to do")
             return Service.START_STICKY
         }
+        val session = sessions.begin()
         disconnecting = false
         phase = Phase.CONNECTING
         connectedSinceMs = 0L
@@ -196,8 +202,8 @@ class GlitchVpnService : VpnService() {
         if (!GlitchVpnCorePlugin.runSystemStartInUi()) startSystemStartEngine()
         // A handler that neither connects nor returns must not hold the
         // service (and, under lockdown, the device's traffic) forever.
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (ownerPfd == null && instance == this) {
+        mainHandler.postDelayed({
+            if (sessions.isCurrent(session) && ownerPfd == null && instance == this) {
                 Log.w(TAG, "System start: no tunnel after 60s, stopping")
                 stopWithoutTunnel()
             }
@@ -475,6 +481,7 @@ class GlitchVpnService : VpnService() {
     }
 
     private fun handleActionStart(intent: Intent?): Int {
+        sessions.begin()
         disconnecting = false
         phase = Phase.CONNECTING
         connectedSinceMs = 0L
@@ -604,12 +611,16 @@ class GlitchVpnService : VpnService() {
 
     // Safety net: if ACTION_FINALIZE never arrives (race/crash), self-finalize.
     private fun finalizeIfStuck(source: String, delayMs: Long) {
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (disconnecting && !finalized) {
+        val session = sessions.current
+        stuckDisconnectCallback?.let { mainHandler.removeCallbacks(it) }
+        val callback = Runnable {
+            if (sessions.isCurrent(session) && disconnecting && !finalized) {
                 Log.w(TAG, "Safety timeout: forcing finalize after $source")
                 handleActionFinalize()
             }
-        }, delayMs)
+        }
+        stuckDisconnectCallback = callback
+        mainHandler.postDelayed(callback, delayMs)
     }
 
     // "ip/prefix", or a bare ip read as a single host.
@@ -697,6 +708,10 @@ class GlitchVpnService : VpnService() {
 
     private fun handleActionFinalize(): Int {
         Log.i(TAG, "ACTION_FINALIZE received -> clearing state")
+        sessions.end()
+        stuckDisconnectCallback?.let { mainHandler.removeCallbacks(it) }
+        stuckDisconnectCallback = null
+        disconnecting = false
         stopKeepAliveUpdates()
         finalized = true
         
