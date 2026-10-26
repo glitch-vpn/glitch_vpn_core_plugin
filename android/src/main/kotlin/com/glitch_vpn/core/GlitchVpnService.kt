@@ -65,6 +65,11 @@ class GlitchVpnService : VpnService() {
         @Volatile private var wakeLock: android.os.PowerManager.WakeLock? = null
         @Volatile private var instance: GlitchVpnService? = null
 
+        // The core is one per process, and so is the thread the service calls
+        // it on: a call still blocked when a service is re-created holds back
+        // the next instance's calls too, rather than parking a thread each.
+        private val coreCalls = CoreCallThread()
+
         /** Why the system started the service: "alwaysOn" or "restart". */
         @Volatile var systemStartReason: String? = null
             private set
@@ -106,7 +111,8 @@ class GlitchVpnService : VpnService() {
     }
 
     // "rx,tx" from the Go core, or "" while no engine runs - answers after the
-    // Dart isolate is gone. Its counts are the proxied traffic only.
+    // Dart isolate is gone. Its counts are the proxied traffic only. Only
+    // coreCalls calls it.
     private external fun nativeEngineTraffic(): String
 
     // This app's bytes on the network when the tunnel came up.
@@ -335,23 +341,16 @@ class GlitchVpnService : VpnService() {
         return (rx - uidRxAtStart).coerceAtLeast(0) to (tx - uidTxAtStart).coerceAtLeast(0)
     }
 
-    // Keeps the previous stats line on any error (JNI missing, core not yet
-    // up). True when the core reported a running engine.
-    private fun refreshStats(): Boolean {
-        try {
-            val raw = nativeEngineTraffic()
-            if (raw.isBlank()) return false
-            val parts = raw.split(",")
-            if (parts.size != 2) return false
-            val coreRx = parts[0].toLongOrNull() ?: return false
-            val coreTx = parts[1].toLongOrNull() ?: return false
-            val units = texts?.byteUnits ?: return true
-            val (rx, tx) = tunnelTraffic(coreRx, coreTx)
-            statsLine = "↓ ${humanBytes(rx, units)}   ↑ ${humanBytes(tx, units)}"
-            return true
-        } catch (_: Throwable) {
-            return false
-        }
+    // Keeps the previous stats line when the read failed (JNI missing) or no
+    // engine runs yet.
+    private fun applyEngineTraffic(raw: String?) {
+        val (coreRx, coreTx) = raw?.let(::parseEngineTraffic) ?: return
+        // A running engine is connected even when the Dart side that would say
+        // so is gone.
+        markConnected()
+        val units = texts?.byteUnits ?: return
+        val (rx, tx) = tunnelTraffic(coreRx, coreTx)
+        statsLine = "↓ ${humanBytes(rx, units)}   ↑ ${humanBytes(tx, units)}"
     }
 
     private fun markConnected() {
@@ -458,20 +457,32 @@ class GlitchVpnService : VpnService() {
         keepAliveHandler = handler
         val runnable = object : Runnable {
             override fun run() {
-                try {
-                    // A running engine is connected even when the Dart side
-                    // that would say so is gone.
-                    if (refreshStats()) markConnected()
-                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    nm.notify(NOTIF_ID, buildNotification())
-                } catch (t: Throwable) {
-                    Log.w(TAG, "keepalive notification update failed: ${t.message}")
+                val tick = this
+                val reading = coreCalls.callIfIdle(::nativeEngineTraffic) { raw ->
+                    handler.post {
+                        // Not the session: keep-alive ends at disconnecting,
+                        // before the session does.
+                        if (keepAliveRunnable !== tick) return@post
+                        applyEngineTraffic(raw)
+                        notifyKeepAlive()
+                    }
                 }
+                // The read still running from an earlier tick: the clock moves on.
+                if (!reading) notifyKeepAlive()
                 handler.postDelayed(this, 1_000L)
             }
         }
         keepAliveRunnable = runnable
         handler.postDelayed(runnable, 1_000L)
+    }
+
+    private fun notifyKeepAlive() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification())
+        } catch (t: Throwable) {
+            Log.w(TAG, "keepalive notification update failed: ${t.message}")
+        }
     }
 
     private fun stopKeepAliveUpdates() {
