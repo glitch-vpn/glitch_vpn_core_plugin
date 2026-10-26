@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'glitch_vpn_core'
-  s.version          = '0.2.1'
+  s.version          = '0.2.2'
   s.summary          = 'Flutter FFI plugin for the libglitchcore VPN core (stub on macOS).'
   s.description      = <<-DESC
 Flutter FFI plugin for the libglitchcore VPN core. There is no engine
