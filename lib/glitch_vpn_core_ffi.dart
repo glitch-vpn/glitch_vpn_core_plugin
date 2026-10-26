@@ -220,16 +220,26 @@ class GlitchVpnCoreFfi {
 
   // Blocks up to the per-link timeout - keep off the UI isolate.
   static Future<String> measurePings(String requestJson) =>
-      Isolate.run(() => _measurePingsSync(requestJson));
+      Isolate.run(() => _callJsonExportSync('MeasurePings', requestJson, '[]'));
 
+  // Probes a pool, like measurePings - keep off the UI isolate.
+  static Future<String> awgPick(String requestJson) =>
+      Isolate.run(() => _callJsonExportSync('AwgPick', requestJson, '{}'));
+
+  // [symbol] is one of the core's string-in, string-out exports; [emptyAnswer]
+  // stands for a null return.
   @pragma('vm:entry-point')
-  static String _measurePingsSync(String requestJson) {
+  static String _callJsonExportSync(
+    String symbol,
+    String requestJson,
+    String emptyAnswer,
+  ) {
     final lib = _openLib();
     final measure = lib
         .lookupFunction<
           ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>),
           ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
-        >('MeasurePings');
+        >(symbol);
     final free = lib
         .lookupFunction<
           ffi.Void Function(ffi.Pointer<ffi.Char>),
@@ -239,7 +249,7 @@ class GlitchVpnCoreFfi {
     ffi.Pointer<ffi.Char> resPtr = ffi.nullptr;
     try {
       resPtr = measure(reqPtr.cast());
-      if (resPtr == ffi.nullptr) return '[]';
+      if (resPtr == ffi.nullptr) return emptyAnswer;
       return resPtr.cast<pkg.Utf8>().toDartString();
     } finally {
       pkg.malloc.free(reqPtr);

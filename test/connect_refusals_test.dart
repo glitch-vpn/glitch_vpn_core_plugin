@@ -27,6 +27,7 @@ void main() {
   });
 
   tearDown(() {
+    GlitchVpnCore.debugAwgPickJsonProvider = null;
     GlitchVpnCore.debugCapabilitiesJsonProvider = null;
     GlitchVpnCore.debugResetEngineIdsCache();
     VpnStatusChannel.instance.emit(VpnStatus.disconnected);
@@ -117,5 +118,56 @@ void main() {
       );
       expect(e.code, 'PROXY_NOT_SUPPORTED');
     });
+
+    test(
+      'AWG_PICK_FAILED when the core picks no link, with its reason',
+      () async {
+        String? request;
+        GlitchVpnCore.debugAwgPickJsonProvider = (r) async {
+          request = r;
+          return '{"error":"chosen awg link has no Interface address"}';
+        };
+        final e = await refusalOf(
+          (core) => GlitchVpnCore.debugPickAwgLink('awg://AAAA\nawg://BBBB', {
+            'balancerStrategy': 'random',
+          }),
+        );
+        expect(e.code, 'AWG_PICK_FAILED');
+        expect(e.message, 'chosen awg link has no Interface address');
+        expect(request, contains('"balancerStrategy":"random"'));
+        expect(request, contains(r'awg://AAAA\nawg://BBBB'));
+      },
+    );
+
+    test('AWG_PICK_FAILED for an unreadable answer', () async {
+      GlitchVpnCore.debugAwgPickJsonProvider = (_) async => 'garbage';
+      final e = await refusalOf(
+        (core) => GlitchVpnCore.debugPickAwgLink('awg://AAAA', const {}),
+      );
+      expect(e.code, 'AWG_PICK_FAILED');
+    });
+
+    test('AWG_PICK_FAILED when the call itself throws', () async {
+      GlitchVpnCore.debugAwgPickJsonProvider = (_) async =>
+          throw ArgumentError('no AwgPick symbol');
+      final e = await refusalOf(
+        (core) => GlitchVpnCore.debugPickAwgLink('awg://AAAA', const {}),
+      );
+      expect(e.code, 'AWG_PICK_FAILED');
+    });
+
+    test(
+      'a pick answer comes back as the chosen link and its addresses',
+      () async {
+        GlitchVpnCore.debugAwgPickJsonProvider = (_) async =>
+            '{"index":1,"addresses":["10.2.0.2/32"],"peersCarryV6":false}';
+        final pick = await GlitchVpnCore.debugPickAwgLink(
+          'awg://a\nawg://b',
+          const {},
+        );
+        expect(pick.index, 1);
+        expect(pick.addresses, ['10.2.0.2/32']);
+      },
+    );
   });
 }

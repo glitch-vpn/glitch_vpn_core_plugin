@@ -570,27 +570,47 @@ class GlitchVpnService : VpnService() {
             // closes the original via PFD.close().
             val pfd = builder.establish()
             if (pfd == null) {
+                releaseHeldTunnel()
                 sendTunError(intent, "establish() returned null")
                 stopSelf()
                 Service.START_NOT_STICKY
             } else {
                 val engineFd = pfd.getFd()
 
+                // A second start while a tunnel is held (the awg pick's holding
+                // tunnel): establish() has replaced that interface in place,
+                // so its descriptor is released only now.
+                val replaced = ownerPfd
                 tunFd = engineFd
                 ownerPfd = pfd
                 finalized = false
+                try { replaced?.close() } catch (t: Throwable) {
+                    Log.w(TAG, "replaced PFD close error: ${t.message}")
+                }
 
                 Log.i(TAG, "TUN established, kept PFD ownership, engineFd=$engineFd")
                 startTrafficCount()
                 sendTunReady(intent, engineFd)
+                stopKeepAliveUpdates()
                 startKeepAliveUpdates()
                 Service.START_STICKY
             }
         } catch (t: Throwable) {
+            releaseHeldTunnel()
             sendTunError(intent, "Failed to establish TUN: ${t.message}")
             stopSelf()
             Service.START_NOT_STICKY
         }
+    }
+
+    // A start that fails while an earlier one's tunnel is held (the awg
+    // pick's holding tunnel) must not leave that tunnel up with no engine.
+    private fun releaseHeldTunnel() {
+        try { ownerPfd?.close() } catch (t: Throwable) {
+            Log.w(TAG, "held PFD close error: ${t.message}")
+        }
+        ownerPfd = null
+        tunFd = -1
     }
 
     private fun showDisconnecting() {

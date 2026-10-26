@@ -836,52 +836,58 @@ class GlitchVpnCore {
     }
   }
 
-  /// The `[Interface]` addresses of a WireGuard config (an INI or one
-  /// `awg://` link), v4 and v6 in order, and whether any `[Peer]` takes IPv6
-  /// in its `AllowedIPs`. A pool of links yields nothing: the core picks the
-  /// link only once the tunnel exists.
+  /// Answers the awg pick instead of the native library when set, so the
+  /// connect path is testable without it.
   @visibleForTesting
-  static ({List<String> addresses, bool peersCarryV6}) debugWgInterface(
-    String config,
-  ) {
-    final ini = _wgIni(config);
-    final addresses = <String>[];
-    var peersCarryV6 = false;
-    var section = '';
-    for (final raw in ini.split('\n')) {
-      final line = raw.split('#').first.trim();
-      if (line.startsWith('[')) {
-        section = line.toLowerCase();
-        continue;
-      }
-      final idx = line.indexOf('=');
-      if (idx == -1) continue;
-      final key = line.substring(0, idx).trim().toLowerCase();
-      final values = line
-          .substring(idx + 1)
-          .split(RegExp('[, ;]'))
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty);
-      if (section == '[interface]' && key == 'address') {
-        addresses.addAll(values);
-      } else if (section == '[peer]' && key == 'allowedips') {
-        if (values.any((v) => v.contains(':'))) peersCarryV6 = true;
-      }
-    }
-    return (addresses: addresses, peersCarryV6: peersCarryV6);
+  static Future<String> Function(String requestJson)? debugAwgPickJsonProvider;
+
+  /// What an awg start takes from the pick: the tunnel's addresses and routes
+  /// (a v6 address no peer routes would only turn IPv6's instant refusal into
+  /// a timeout, so it is dropped) and the `awgPicked` opt that stops the core
+  /// probing again.
+  @visibleForTesting
+  static ({List<String> addresses, List<String> routes, String awgPicked})
+  debugAwgStartPlan(AwgPick pick, {required bool disableIPv6}) {
+    final tunnel = debugTunnelFamilies(
+      pick.addresses,
+      disableIPv6: disableIPv6 || !pick.peersCarryV6,
+    );
+    return (
+      addresses: tunnel.addresses,
+      routes: tunnel.routes,
+      awgPicked: '${pick.index}',
+    );
   }
 
-  // awg://<base64url(INI)>[#name], the core's share-link form; anything else
-  // is read as an INI.
-  static String _wgIni(String config) {
-    final link = config.trim();
-    if (!link.startsWith('awg://') || link.contains('\n')) return config;
-    final payload = link.substring('awg://'.length).split('#').first.trim();
+  // The core probes the pool and reads the chosen link's own tunnel
+  // addresses; the TUN is built from that answer, never from a default.
+  @visibleForTesting
+  static Future<AwgPick> debugPickAwgLink(
+    String config,
+    Map<String, String> opts,
+  ) async {
+    final request = jsonEncode({'config': config, 'opts': opts});
+    final String raw;
     try {
-      return utf8.decode(base64Url.decode(base64Url.normalize(payload)));
-    } on FormatException {
-      return '';
+      raw =
+          await (debugAwgPickJsonProvider?.call(request) ??
+              GlitchVpnCoreFfi.awgPick(request));
+    } on Object catch (e) {
+      throw _refuse('AWG_PICK_FAILED', 'AwgPick failed: ${e.runtimeType}');
     }
+    final pick = AwgPick.tryParse(raw);
+    if (pick != null) return pick;
+    Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {}
+    final coreError = decoded is Map ? decoded['error']?.toString() : null;
+    throw _refuse(
+      'AWG_PICK_FAILED',
+      (coreError == null || coreError.isEmpty)
+          ? 'unreadable awg pick'
+          : coreError,
+    );
   }
 
   // The TUN's own addresses for the engines that terminate it in user space
@@ -990,9 +996,14 @@ class GlitchVpnCore {
   /// The exception's message is the status reason, word for word:
   /// - `ENGINE_NOT_IN_BUILD`, `UNSUPPORTED_STRATEGY` ([balancerStrategiesFor]),
   ///   `UNSUPPORTED_DOMAIN_STRATEGY` ([domainStrategiesFor]),
-  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`),
-  ///   `NO_TUNNEL_ADDRESS` (Android: an awg config with only IPv6 addresses
-  ///   and IPv6 off): refused before anything starts.
+  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`):
+  ///   refused before anything starts.
+  /// - `NO_TUNNEL_ADDRESS` (Android: an awg config with only IPv6 addresses
+  ///   and IPv6 off), refused once the status is connecting and the pick is
+  ///   made.
+  /// - `AWG_PICK_FAILED`: the core could not pick an awg link (no link, no
+  ///   `[Interface]` address, an unreadable answer, or a core without the
+  ///   pick); the reason is the core's text.
   /// - `ELEVATION_REQUIRED`: Windows without admin rights; [ensureAdmin] may
   ///   already be relaunching the app elevated.
   /// - `PREPARE_TUNNEL_FAILED`: Android gave no TUN fd.
@@ -1437,34 +1448,29 @@ class GlitchVpnCore {
     if (awgDns.isEmpty) awgDns = _extractWgDns(config);
     if (awgDns.isEmpty) awgDns = effectiveDns;
 
-    // A v6 address no peer routes would only turn IPv6's instant refusal
-    // into a timeout.
-    final wg = debugWgInterface(config);
-    final tunnel = debugTunnelFamilies(
-      wg.addresses.isEmpty ? const [_tunAddressV4] : wg.addresses,
-      disableIPv6: disableIPv6 || !wg.peersCarryV6,
-    );
-    if (Platform.isAndroid && tunnel.addresses.isEmpty) {
-      throw _refuse(
-        'NO_TUNNEL_ADDRESS',
-        'awg config has only IPv6 addresses and IPv6 is off',
-      );
-    }
-
     VpnStatusChannel.instance.emit(VpnStatus.connecting);
     _resetSessionChannels();
 
-    int fd = -1;
+    // The pick probes the pool for seconds. A tunnel with the default
+    // addresses holds the traffic meanwhile, so a reconnect never runs
+    // outside it; the app's own sockets are outside the tunnel on Android,
+    // so the probe still reaches the servers. The pick's own tunnel then
+    // replaces it in place.
     if (Platform.isAndroid) {
-      fd = await _prepareTunnel({
+      final holding = debugTunnelFamilies(const [
+        _tunAddressV4,
+        _tunAddressV6,
+      ], disableIPv6: disableIPv6);
+      await _prepareTunnel({
         'notification': notification.toMap(),
-        'addresses': tunnel.addresses,
-        'routes': tunnel.routes,
+        'addresses': holding.addresses,
+        'routes': holding.routes,
         'dns': awgDns,
         'splitType': effectiveSplitType.name,
         'splitApps': effectiveSplitApps,
       });
     }
+
     final awgOpts = <String, String>{
       if (disableIPv6) 'disableIPv6': '1',
       if (balancerStrategy.isNotEmpty) 'balancerStrategy': balancerStrategy,
@@ -1478,6 +1484,39 @@ class GlitchVpnCore {
       ipv4EchoUrl: ipv4EchoUrl,
       ipv6EchoUrl: ipv6EchoUrl,
     );
+    final AwgPick pick;
+    try {
+      pick = await debugPickAwgLink(config, awgOpts);
+    } on PlatformException {
+      await _stopTunnelSilently();
+      rethrow;
+    }
+    final plan = debugAwgStartPlan(pick, disableIPv6: disableIPv6);
+    if (Platform.isAndroid && plan.addresses.isEmpty) {
+      await _stopTunnelSilently();
+      throw _refuse(
+        'NO_TUNNEL_ADDRESS',
+        'awg config has only IPv6 addresses and IPv6 is off',
+      );
+    }
+
+    int fd = -1;
+    if (Platform.isAndroid) {
+      try {
+        fd = await _prepareTunnel({
+          'notification': notification.toMap(),
+          'addresses': plan.addresses,
+          'routes': plan.routes,
+          'dns': awgDns,
+          'splitType': effectiveSplitType.name,
+          'splitApps': effectiveSplitApps,
+        });
+      } on Object {
+        await _stopTunnelSilently();
+        rethrow;
+      }
+    }
+    awgOpts['awgPicked'] = plan.awgPicked;
     final res = _withErrorStatus(
       'EngineStart',
       () => GlitchVpnCoreFfi.instance.engineStart(
@@ -2107,6 +2146,41 @@ class PingResult {
         ? json['error'].toString()
         : null,
   );
+}
+
+/// The awg link a start will use, as the core's pick answers: its position in
+/// the pool, the `[Interface]` addresses (IPv4 and IPv6, in order) and whether
+/// any of its peers routes IPv6. The link itself stays in the core.
+class AwgPick {
+  final int index;
+  final List<String> addresses;
+  final bool peersCarryV6;
+  const AwgPick({
+    required this.index,
+    required this.addresses,
+    required this.peersCarryV6,
+  });
+
+  /// Null for anything but a complete answer: an error object, no address, or
+  /// text that is not JSON.
+  static AwgPick? tryParse(String raw) {
+    try {
+      final json = jsonDecode(raw);
+      if (json is! Map) return null;
+      final index = json['index'];
+      final addresses = json['addresses'];
+      if (index is! int || index < 0) return null;
+      if (addresses is! List || addresses.isEmpty) return null;
+      if (addresses.any((a) => a is! String || a.isEmpty)) return null;
+      return AwgPick(
+        index: index,
+        addresses: List<String>.unmodifiable(addresses.cast<String>()),
+        peersCarryV6: json['peersCarryV6'] == true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Engine versions of the loaded core. A field is null for an engine not in

@@ -229,46 +229,67 @@ void main() {
   });
 
   group('Android tunnel families', () {
-    test('every Address of the interface, both families, in order', () {
-      const ini = '''
-[Interface]
-PrivateKey = k
-Address = 10.10.0.2/32, fd10::2/128 # home
-Address=10.10.1.2/32
-[Peer]
-Address = 192.0.2.1/32
-AllowedIPs = 0.0.0.0/0, ::/0
-''';
-      final wg = GlitchVpnCore.debugWgInterface(ini);
-      expect(wg.addresses, ['10.10.0.2/32', 'fd10::2/128', '10.10.1.2/32']);
-      expect(wg.peersCarryV6, isTrue);
+    test('the pick answer carries the chosen link and its addresses', () {
+      final pick = AwgPick.tryParse(
+        '{"index":2,'
+        '"addresses":["10.20.0.2/32","fd20::2/128"],"peersCarryV6":true}',
+      )!;
+      expect(pick.index, 2);
+      expect(pick.addresses, ['10.20.0.2/32', 'fd20::2/128']);
+      expect(pick.peersCarryV6, isTrue);
     });
 
-    test('peers without an IPv6 AllowedIPs carry no IPv6', () {
-      const ini = '''
-[Interface]
-Address = 10.10.0.2/32, fd10::2/128
-[Peer]
-AllowedIPs = 0.0.0.0/0
-''';
-      expect(GlitchVpnCore.debugWgInterface(ini).peersCarryV6, isFalse);
+    test('a pick without IPv6 peers says so', () {
+      final pick = AwgPick.tryParse(
+        '{"index":0,"addresses":["10.20.0.2/32"]}',
+      )!;
+      expect(pick.peersCarryV6, isFalse);
     });
 
-    test('an awg:// link is read as the INI it carries', () {
-      final wg = GlitchVpnCore.debugWgInterface(
-        'awg://W0ludGVyZmFjZV0KUHJpdmF0ZUtleSA9IGsKQWRkcmVzcyA9IDEwLjIwLjAuMi8zMiwgZmQyMDo6Mi8xMjgKW1BlZXJdCkFsbG93ZWRJUHMgPSAwLjAuMC4wLzAsIDo6LzAK#home',
+    test('a v4-only pick drops the v6 address and its route', () {
+      final plan = GlitchVpnCore.debugAwgStartPlan(
+        const AwgPick(
+          index: 1,
+          addresses: ['10.20.0.2/32', 'fd20::2/128'],
+          peersCarryV6: false,
+        ),
+        disableIPv6: false,
       );
-      expect(wg.addresses, ['10.20.0.2/32', 'fd20::2/128']);
-      expect(wg.peersCarryV6, isTrue);
+      expect(plan.addresses, ['10.20.0.2/32']);
+      expect(plan.routes, ['0.0.0.0/0']);
+      expect(plan.awgPicked, '1');
     });
 
-    test('a pool of links, garbage or no interface yields no address', () {
-      expect(
-        GlitchVpnCore.debugWgInterface('awg://AAAA\nawg://BBBB').addresses,
-        isEmpty,
+    test('a dual-stack pick keeps both families', () {
+      final plan = GlitchVpnCore.debugAwgStartPlan(
+        const AwgPick(
+          index: 0,
+          addresses: ['10.20.0.2/32', 'fd20::2/128'],
+          peersCarryV6: true,
+        ),
+        disableIPv6: false,
       );
-      expect(GlitchVpnCore.debugWgInterface('awg://%%').addresses, isEmpty);
-      expect(GlitchVpnCore.debugWgInterface('not a config').addresses, isEmpty);
+      expect(plan.addresses, ['10.20.0.2/32', 'fd20::2/128']);
+      expect(plan.routes, ['0.0.0.0/0', '::/0']);
+    });
+
+    test('IPv6 off drops the v6 address even when peers carry it', () {
+      final plan = GlitchVpnCore.debugAwgStartPlan(
+        const AwgPick(index: 0, addresses: ['fd20::2/128'], peersCarryV6: true),
+        disableIPv6: true,
+      );
+      expect(plan.addresses, isEmpty);
+      expect(plan.routes, isEmpty);
+    });
+
+    test('an error, no address or garbage is no pick', () {
+      expect(AwgPick.tryParse('{"error":"no awg link"}'), isNull);
+      expect(AwgPick.tryParse('{"index":0,"addresses":[]}'), isNull);
+      expect(AwgPick.tryParse('{"index":-1,"addresses":["x"]}'), isNull);
+      expect(AwgPick.tryParse('{"index":0}'), isNull);
+      expect(AwgPick.tryParse('[]'), isNull);
+      expect(AwgPick.tryParse('not json'), isNull);
+      expect(AwgPick.tryParse(''), isNull);
     });
 
     test('a v6-only config with IPv6 off keeps no address', () {
