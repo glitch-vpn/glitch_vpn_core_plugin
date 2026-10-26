@@ -7,11 +7,11 @@ dependencies:
   glitch_vpn_core:
     git:
       url: https://github.com/glitch-vpn/glitch_vpn_core_plugin.git
-      ref: <commit>                        # a full commit hash from main
+      ref: v0.2.0
 ```
 
-No version of the plugin is tagged yet, so pin a commit from `main` until one
-is; a branch name moves under you.
+Pin a release tag; a branch name moves under you. Each tag carries the core
+release it was built against.
 
 The native library is not in git. `flutter build` downloads the release pinned
 in the plugin's `pubspec.yaml` and bundles it — nothing to install by hand.
