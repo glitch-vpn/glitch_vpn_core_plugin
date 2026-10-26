@@ -606,6 +606,8 @@ class GlitchVpnCore {
   // Runs the handler the app registered; a start it leaves without a running
   // engine is declined, so the service does not hold an empty tunnel.
   static Future<void> _runSystemStart() async {
+    final initializeEngine = debugSystemStartInitialize ?? initialize;
+    final engineRunning = debugSystemStartEngineRunning ?? isRunning;
     Map<Object?, Object?>? info;
     try {
       info = await _ch.invokeMapMethod<Object?, Object?>('systemStart');
@@ -621,7 +623,7 @@ class GlitchVpnCore {
         : VpnSystemStart.alwaysOn;
     if (handler is Future<void> Function(VpnSystemStart)) {
       try {
-        await initialize();
+        await initializeEngine();
         await handler(start);
       } catch (e) {
         debugPrint(
@@ -631,7 +633,7 @@ class GlitchVpnCore {
     }
     var running = false;
     try {
-      running = isRunning();
+      running = engineRunning();
     } catch (_) {}
     if (!running) {
       try {
@@ -639,6 +641,17 @@ class GlitchVpnCore {
       } catch (_) {}
     }
   }
+
+  /// Stand-ins for [initialize] and [isRunning] so the system-start path runs
+  /// without the native library.
+  @visibleForTesting
+  static Future<void> Function()? debugSystemStartInitialize;
+
+  @visibleForTesting
+  static bool Function()? debugSystemStartEngineRunning;
+
+  @visibleForTesting
+  static Future<void> debugRunSystemStart() => _runSystemStart();
 
   /// Native disconnect request (e.g. notification). Unset → plugin disconnects.
   static void registerDisconnectPressedHandler(
