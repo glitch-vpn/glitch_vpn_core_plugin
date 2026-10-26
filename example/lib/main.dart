@@ -536,11 +536,12 @@ class _CoreTestPageState extends State<CoreTestPage> {
         children: [
           Row(
             children: [
-              const Text(
-                'CoreCapabilities',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              const Expanded(
+                child: Text(
+                  'CoreCapabilities',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
-              const Spacer(),
               Chip(
                 label: Text(
                   _activeEngine.isEmpty ? 'idle' : 'active: $_activeEngine',
@@ -1600,10 +1601,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
             children: [
               const Text('Logs', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(width: 8),
               DropdownButton<int>(
                 value: _verbosity,
                 items: const [
@@ -1617,7 +1619,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   GlitchVpnCore.setLogsVerbosity(_verbosity);
                 },
               ),
-              const SizedBox(width: 8),
               const Text('mem:'),
               DropdownButton<MemoryLimit>(
                 value: _memoryLimit,
@@ -1645,7 +1646,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   GlitchVpnCore.setMemoryLimit(_memoryLimit);
                 },
               ),
-              const Spacer(),
               // File logging OFF by default; toggle mirrors log lines to a temp
               // file (getLogFilePath / clearLogFile via the plugin).
               IconButton(
