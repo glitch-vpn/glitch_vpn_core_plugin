@@ -1236,12 +1236,28 @@ class GlitchVpnCore {
     try {
       return call();
     } on Object catch (e) {
-      VpnStatusChannel.instance.emit(
-        VpnStatus.error,
-        reason: '$step failed: ${e.runtimeType}',
-      );
+      _emitStepFailure(step, e);
       rethrow;
     }
+  }
+
+  static Future<T> _awaitWithErrorStatus<T>(
+    String step,
+    Future<T> Function() call,
+  ) async {
+    try {
+      return await call();
+    } on Object catch (e) {
+      _emitStepFailure(step, e);
+      rethrow;
+    }
+  }
+
+  static void _emitStepFailure(String step, Object e) {
+    VpnStatusChannel.instance.emit(
+      VpnStatus.error,
+      reason: '$step failed: ${e.runtimeType}',
+    );
   }
 
   // Listeners must not show the previous session's data while a new tunnel
@@ -1366,7 +1382,7 @@ class GlitchVpnCore {
       ipv6EchoUrl: ipv6EchoUrl,
     );
 
-    final res = _withErrorStatus(
+    final res = await _awaitWithErrorStatus(
       'EngineStart',
       () => GlitchVpnCoreFfi.instance.engineStart(
         'xray',
@@ -1517,7 +1533,7 @@ class GlitchVpnCore {
       }
     }
     awgOpts['awgPicked'] = plan.awgPicked;
-    final res = _withErrorStatus(
+    final res = await _awaitWithErrorStatus(
       'EngineStart',
       () => GlitchVpnCoreFfi.instance.engineStart(
         'awg',
@@ -1624,7 +1640,7 @@ class GlitchVpnCore {
       ipv6EchoUrl: ipv6EchoUrl,
     );
 
-    final res = _withErrorStatus(
+    final res = await _awaitWithErrorStatus(
       'EngineStart',
       () => GlitchVpnCoreFfi.instance.engineStart(
         'mihomo',

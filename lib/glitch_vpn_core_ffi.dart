@@ -160,7 +160,9 @@ class GlitchVpnCoreFfi {
   String coreCapabilitiesJson() =>
       _consumeCString(_bindings.CoreCapabilities(), '{"engines":[]}');
 
-  int engineStart(
+  // A start can wait on another engine's start or stop in the core, and the
+  // UI isolate runs on Android's main thread - keep it off there.
+  Future<int> engineStart(
     String engineId, {
     required String config,
     required int tunFd,
@@ -168,7 +170,7 @@ class GlitchVpnCoreFfi {
     required int logLevel,
     Map<String, String> opts = const {},
     Map<String, dynamic>? dnsConfig,
-  }) {
+  }) async {
     final request = jsonEncode({
       'config': config,
       'tunFd': tunFd,
@@ -177,13 +179,20 @@ class GlitchVpnCoreFfi {
       if (opts.isNotEmpty) 'opts': opts,
       'dnsConfig': ?dnsConfig,
     });
-    final enginePtr = engineId.toNativeUtf8();
-    final requestPtr = request.toNativeUtf8();
     developer.log('EngineStart($engineId)');
+    final res = await Isolate.run(() => _engineStartSync(engineId, request));
+    developer.log('EngineStart($engineId) = $res');
+    return res;
+  }
+
+  @pragma('vm:entry-point')
+  static int _engineStartSync(String engineId, String requestJson) {
+    final enginePtr = engineId.toNativeUtf8();
+    final requestPtr = requestJson.toNativeUtf8();
     try {
-      final res = _bindings.EngineStart(enginePtr.cast(), requestPtr.cast());
-      developer.log('EngineStart($engineId) = $res');
-      return res;
+      return GlitchCoreBindings(
+        _openLib(),
+      ).EngineStart(enginePtr.cast(), requestPtr.cast());
     } finally {
       pkg.malloc.free(enginePtr);
       pkg.malloc.free(requestPtr);
