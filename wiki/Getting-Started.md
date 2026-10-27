@@ -7,7 +7,7 @@ dependencies:
   glitch_vpn_core:
     git:
       url: https://github.com/glitch-vpn/glitch_vpn_core_plugin.git
-      ref: v0.2.2
+      ref: v0.2.3
 ```
 
 Pin a release tag; a branch name moves under you. Each tag carries the core
