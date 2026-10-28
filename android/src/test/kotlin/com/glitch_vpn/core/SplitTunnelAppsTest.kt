@@ -10,16 +10,20 @@ internal class SplitTunnelAppsTest {
     private class FakeTarget(private val installed: Set<String>) : AppRoutingTarget {
         val allowed = mutableListOf<String>()
         val disallowed = mutableListOf<String>()
+        private var allowCalled = false
+        private var disallowCalled = false
 
         override fun isInstalled(packageName: String) = packageName in installed
 
         override fun allow(packageName: String) {
-            if (disallowed.isNotEmpty()) throw UnsupportedOperationException()
+            if (disallowCalled) throw UnsupportedOperationException()
+            allowCalled = true
             if (packageName in installed) allowed += packageName
         }
 
         override fun disallow(packageName: String) {
-            if (allowed.isNotEmpty()) throw UnsupportedOperationException()
+            if (allowCalled) throw UnsupportedOperationException()
+            disallowCalled = true
             if (packageName in installed) disallowed += packageName
         }
     }
