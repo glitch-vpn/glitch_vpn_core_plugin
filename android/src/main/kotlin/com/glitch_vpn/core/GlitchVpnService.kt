@@ -16,6 +16,7 @@ import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -525,14 +526,30 @@ class GlitchVpnService : VpnService() {
             intent?.getStringArrayExtra(EXTRA_SPLIT_APPS)
         }
 
-        // Disallow our own app unless we're in whitelist mode (cannot mix allowed+disallowed)
-        if (splitType?.lowercase() != "whitelist") {
-            try { 
-                Log.i(TAG, "Disallowing self package: $packageName")
-                builder.addDisallowedApplication(packageName) 
-            } catch (e: Throwable) {
-                Log.e(TAG, "CRITICAL: Failed to disallow self ($packageName): ${e.message}")
-            }
+        val appRoutingOutcome = applyAppRouting(
+            object : AppRoutingTarget {
+                override fun isInstalled(packageName: String) =
+                    try { packageManager.getApplicationInfo(packageName, 0); true }
+                    catch (_: PackageManager.NameNotFoundException) { false }
+
+                override fun allow(packageName: String) {
+                    try { builder.addAllowedApplication(packageName) } catch (e: Throwable) {
+                        Log.e(TAG, "Failed to allow an app: ${e.javaClass.simpleName}")
+                    }
+                }
+
+                override fun disallow(packageName: String) {
+                    try { builder.addDisallowedApplication(packageName) } catch (e: Throwable) {
+                        Log.e(TAG, "Failed to disallow an app: ${e.javaClass.simpleName}")
+                    }
+                }
+            },
+            splitType,
+            splitApps?.toList() ?: emptyList(),
+            packageName,
+        )
+        if (appRoutingOutcome == AppRoutingOutcome.WhitelistFellBack) {
+            Log.w(TAG, "Whitelist holds no installed app; routing every app but this one")
         }
 
         val dnsFromIntent = intent?.getStringExtra(EXTRA_DNS)
@@ -544,22 +561,6 @@ class GlitchVpnService : VpnService() {
             }
         } catch (_: Throwable) {}
 
-        if (!splitApps.isNullOrEmpty()) {
-            when (splitType?.lowercase()) {
-                "whitelist" -> {
-                    for (pkg in splitApps) try { builder.addAllowedApplication(pkg) } catch (e: Throwable) {
-                        Log.e(TAG, "Failed to allow $pkg: ${e.message}")
-                    }
-                }
-                "blacklist" -> {
-                    for (pkg in splitApps) try { builder.addDisallowedApplication(pkg) } catch (e: Throwable) {
-                        Log.e(TAG, "Failed to disallow $pkg: ${e.message}")
-                    }
-                }
-                else -> {}
-            }
-        }
-        
         // A family with no route here is blocked by Android; allowFamily
         // would let it bypass the tunnel instead.
         for (addr in addresses) {

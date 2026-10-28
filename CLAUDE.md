@@ -106,9 +106,11 @@ wiki/                         # user-facing docs (GitHub wiki page names);
   start without one; on Android `initialize()` sets `xray.location.asset` to a
   private no-backup dir so a connect without `geoAssetsDir` still has a home.
 - Android `prepareTunnel` returns a TUN fd; the whole app package is excluded
-  from the VPN (`addDisallowedApplication`), so in-app HTTP does **not**
-  traverse the tunnel — external-IP resolution happens core-side for this
-  reason.
+  from the VPN (`addDisallowedApplication`; in whitelist mode by being left off
+  the allowed list, with a fallback to the disallowed list when no listed app
+  is installed: `addAllowedApplication` accepts an absent package and adds no
+  rule), so in-app HTTP does **not** traverse the tunnel — external-IP
+  resolution happens core-side for this reason.
 - Android starts the VpnService by itself (always-on, a sticky restart after
   the process died). That start never establishes a TUN: the app's
   system-start handler (`registerSystemStartHandler`) connects in a headless
