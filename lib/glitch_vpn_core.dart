@@ -1916,15 +1916,19 @@ class GlitchVpnCore {
   /// Url-test latency per link (through that server). No engine/admin/TUN needed.
   /// A link that fails carries its own [PingResult.error]; a run the core
   /// refuses as a whole throws [PlatformException] `PING_FAILED` with the
-  /// core's reason as the message.
+  /// core's reason as the message. With [engine], every link is measured on
+  /// that engine alone, and a link it cannot carry comes back not alive with
+  /// the core's reason, never measured on another engine.
   static Future<List<PingResult>> measurePings(
     List<String> links, {
     String? probeUrl,
     int timeoutMs = 5000,
     int concurrency = 8,
+    VpnEngine? engine,
   }) async {
     if (links.isEmpty) return const <PingResult>[];
     final request = jsonEncode({
+      if (engine != null) 'engine': engine.name,
       'links': links,
       if (probeUrl != null && probeUrl.trim().isNotEmpty) 'probeUrl': probeUrl,
       'timeoutMs': timeoutMs,

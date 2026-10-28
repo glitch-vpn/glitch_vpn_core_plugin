@@ -436,6 +436,21 @@ void main() {
       expect(results[1].error, 'timeout');
     });
 
+    test(
+      'names the pinned engine in the request, and none without one',
+      () async {
+        final requests = <Map<String, Object?>>[];
+        GlitchVpnCore.debugMeasurePingsJsonProvider = (request) async {
+          requests.add(jsonDecode(request) as Map<String, Object?>);
+          return '[]';
+        };
+        await GlitchVpnCore.measurePings(['a'], engine: VpnEngine.mihomo);
+        await GlitchVpnCore.measurePings(['a']);
+        expect(requests[0]['engine'], 'mihomo');
+        expect(requests[1].containsKey('engine'), isFalse);
+      },
+    );
+
     test('throws with the core reason when it refuses the run', () async {
       GlitchVpnCore.debugMeasurePingsJsonProvider = (_) async =>
           '{"error":"invalid character looking for beginning of value"}';
