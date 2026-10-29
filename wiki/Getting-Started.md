@@ -7,7 +7,7 @@ dependencies:
   glitch_vpn_core:
     git:
       url: https://github.com/glitch-vpn/glitch_vpn_core_plugin.git
-      ref: v0.2.8
+      ref: v0.2.9
 ```
 
 Pin a release tag; a branch name moves under you. Each tag carries the core
@@ -86,9 +86,12 @@ comes back in sync without reconnecting.
 
 ## Routing
 
-Rules are ordered tiers, evaluated first to last; within a tier block beats
-direct beats proxy. That ordering is the point: a specific rule in tier 1 wins
-over a broad one in tier 2, whatever their outcomes.
+Rules are ordered tiers, evaluated first to last: a specific rule in tier 1
+wins over a broad one in tier 2, whatever their outcomes. Within a tier a site
+named on its own is an exception to a broader entry of another outcome (`full:`
+before `domain:` before `keyword:`/`regexp:` before `geosite:`; an IP or CIDR
+before `geoip:`), a block yields only to a more specific entry of its own kind,
+and at equal rank block beats direct beats proxy.
 
 ```dart
 routing: const VpnRouting(
