@@ -10,7 +10,7 @@ class VpnServerInfo {
   final String host;
   final int port; // 0 if unknown
 
-  /// vless | vmess | trojan | ss | hysteria2 | tuic | anytls | awg
+  /// vless | vmess | trojan | ss | hysteria2 | tuic | anytls | awg (WireGuard and AmneziaWG) | socks | http
   final String protocol;
 
   const VpnServerInfo({
