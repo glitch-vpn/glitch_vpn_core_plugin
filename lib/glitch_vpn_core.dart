@@ -675,10 +675,11 @@ class GlitchVpnCore {
         _coreUsesService = true;
       }
       // Before InitializeController (reads GLITCH_PPROF_ADDR).
-      if (kDebugMode) {
+      const profilerAddress = String.fromEnvironment('GLITCH_PPROF_ADDR');
+      if (profilerAddress.isNotEmpty) {
         GlitchVpnCoreFfi.instance.setEnvVar(
           'GLITCH_PPROF_ADDR',
-          '127.0.0.1:6060',
+          profilerAddress,
         );
       }
       await GlitchVpnCoreFfi.instance.initialize();

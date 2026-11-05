@@ -51,6 +51,17 @@ relaunches over a live tunnel — all through the same call.
 
 The app under `example/` exercises the whole API and doubles as a test client.
 
+## Profiling the core
+
+The core serves Go's `net/http/pprof` and expvar, without credentials, only
+when the app is built with an address for it:
+
+```sh
+flutter run --dart-define=GLITCH_PPROF_ADDR=127.0.0.1:6060
+```
+
+Without the define, no build opens the port.
+
 ## Contributing
 
 Help is most useful on iOS/macOS support, on split tunneling and per-process
