@@ -154,16 +154,17 @@ enum MemoryLimit {
   final int bytes;
 }
 
-/// One ordered rule group; within a tier block beats direct beats proxy.
+/// One ordered rule group; within a tier block beats direct beats [routes] (in
+/// list order) beats proxy.
 /// Matchers use prefixes (`geoip:`, `geosite:`, `domain:`, `full:`,
 /// `keyword:`, `regexp:`, `process:`) or bare IP/CIDR/host. `domain:`/`full:`
 /// match on label boundaries, so `domain:ru` covers `ru` and every `*.ru`;
 /// dots around the zone are stripped (`.ru` ≡ `ru`). `keyword:` is a
 /// substring and keeps its dots.
 ///
-/// [routes] send matched flows to a named target of [VpnRouting.targets]; in a
-/// tier block beats direct beats routes (in list order) beats proxy. A route
-/// takes no `process:` matcher. Needs [GlitchVpnCore.routeTargetsSupported].
+/// [routes] send matched flows to a named target of [VpnRouting.targets]. A
+/// route takes no `process:` matcher. Needs
+/// [GlitchVpnCore.routeTargetsSupported].
 class VpnRoutingTier {
   final List<String> block;
   final List<String> direct;
