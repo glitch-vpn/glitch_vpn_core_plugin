@@ -5,21 +5,14 @@ the Dart layer is a thin wrapper over the FFI and does not move them.
 
 ## App size
 
-The plugin bundles one native library per platform. Full composition
-(xray + awg + mihomo):
-
-| Platform | Bundled |
-|---|---|
-| Android arm64 | 63.1 MB `.so` per ABI |
-| Windows amd64 | 59.8 MB `.dll` + 0.4 MB `wintun.dll` |
-| Linux amd64 | 69.4 MB `.so` |
+The plugin bundles one native library per platform (xray + mihomo). Sizes for
+the current core are not measured.
 
 An APK that carries arm64 and x86_64 pays for both unless you split per ABI.
 Play Store delivery does that automatically; a bare APK does not.
 
 This is the number to attack if size matters: a build with fewer engines is
-much smaller (awg alone is 11.2 MB, xray alone 32.6 MB against 59.8 MB for all
-three). See [Engine
+much smaller. See [Engine
 Compositions](https://github.com/glitch-vpn/libglitchcore/wiki/Engine-Compositions)
 — it needs a custom core build and a pin change, not a plugin change.
 
