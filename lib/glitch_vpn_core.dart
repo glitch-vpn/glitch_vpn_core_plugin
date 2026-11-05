@@ -112,7 +112,7 @@ class VpnByteUnits {
   });
 }
 
-enum VpnEngine { xray, awg, mihomo }
+enum VpnEngine { xray, mihomo }
 
 /// Why Android started the tunnel with no app session behind it.
 enum VpnSystemStart {
@@ -172,7 +172,7 @@ class VpnRoutingTier {
   });
 }
 
-/// Routing for xray/mihomo; awg reads [disableIPv6] alone. Tiers are
+/// Routing rules. Tiers are
 /// evaluated in list order, first match wins across the whole sequence; then
 /// LAN bypass and the mode catch-all.
 /// `process:` rules are the exception wherever the desktop tun2socks bridge
@@ -188,10 +188,9 @@ class VpnRouting {
   /// RFC1918/CGNAT/loopback → direct.
   final bool localNetworksDirect;
 
-  /// xray/mihomo: reject ::/0 and suppress AAAA. On Android, for every
+  /// Reject ::/0 and suppress AAAA. On Android, for every
   /// engine, it also keeps IPv6 out of the tunnel, where Android then blocks
-  /// it; off, IPv6 is tunnelled. Elsewhere awg only skips the IPv6 lookup of
-  /// the external IP.
+  /// it; off, IPv6 is tunnelled.
   final bool disableIPv6;
 
   /// Reject UDP except :53.
@@ -253,8 +252,6 @@ List<String> balancerStrategiesFor(VpnEngine engine) {
         'load-balance',
         'load-balance-hash',
       ];
-    case VpnEngine.awg:
-      return const ['leastping', 'random', 'fallback'];
   }
 }
 
@@ -265,12 +262,11 @@ List<String> domainStrategiesFor(VpnEngine engine) {
     case VpnEngine.xray:
       return const ['asis', 'ipifnonmatch', 'ipondemand'];
     case VpnEngine.mihomo:
-    case VpnEngine.awg:
       return const [];
   }
 }
 
-/// uTLS fingerprints for [engine] (sets differ; awg → empty).
+/// uTLS fingerprints for [engine] (the sets differ).
 List<String> fingerprintsFor(VpnEngine engine) {
   switch (engine) {
     case VpnEngine.xray:
@@ -304,15 +300,12 @@ List<String> fingerprintsFor(VpnEngine engine) {
         'firefox120',
         'safari16',
       ];
-    case VpnEngine.awg:
-      return const [];
   }
 }
 
 enum VpnDnsMode { fakeIp, normal }
 
-/// DNS for xray/mihomo (awg uses the first plain server only, and takes it
-/// verbatim — no port suffix there).
+/// DNS for xray/mihomo.
 /// Schemes: plain / `tls://` / `https://` / `quic://` / `tcp://`; a plain
 /// server may carry a port (`10.0.0.1:5353`).
 class VpnDns {
@@ -322,12 +315,11 @@ class VpnDns {
 
   /// Static name → addresses; keys take xray matcher prefixes verbatim. An
   /// entry with several values keeps only IPs — an alias name is single-valued.
-  /// awg ignores.
   final Map<String, List<String>> hosts;
 
   /// Resolvers for direct-routed names. fake-ip covers every direct dial on
   /// both engines; xray's normal mode falls back to the direct domain rules,
-  /// and direct-all inverts the split (README). awg ignores.
+  /// and direct-all inverts the split (README).
   final List<String> directServers;
 
   const VpnDns({
@@ -836,60 +828,6 @@ class GlitchVpnCore {
     }
   }
 
-  /// Answers the awg pick instead of the native library when set, so the
-  /// connect path is testable without it.
-  @visibleForTesting
-  static Future<String> Function(String requestJson)? debugAwgPickJsonProvider;
-
-  /// What an awg start takes from the pick: the tunnel's addresses and routes
-  /// (a v6 address no peer routes would only turn IPv6's instant refusal into
-  /// a timeout, so it is dropped) and the `awgPicked` opt that stops the core
-  /// probing again.
-  @visibleForTesting
-  static ({List<String> addresses, List<String> routes, String awgPicked})
-  debugAwgStartPlan(AwgPick pick, {required bool disableIPv6}) {
-    final tunnel = debugTunnelFamilies(
-      pick.addresses,
-      disableIPv6: disableIPv6 || !pick.peersCarryV6,
-    );
-    return (
-      addresses: tunnel.addresses,
-      routes: tunnel.routes,
-      awgPicked: '${pick.index}',
-    );
-  }
-
-  // The core probes the pool and reads the chosen link's own tunnel
-  // addresses; the TUN is built from that answer, never from a default.
-  @visibleForTesting
-  static Future<AwgPick> debugPickAwgLink(
-    String config,
-    Map<String, String> opts,
-  ) async {
-    final request = jsonEncode({'config': config, 'opts': opts});
-    final String raw;
-    try {
-      raw =
-          await (debugAwgPickJsonProvider?.call(request) ??
-              GlitchVpnCoreFfi.awgPick(request));
-    } on Object catch (e) {
-      throw _refuse('AWG_PICK_FAILED', 'AwgPick failed: ${e.runtimeType}');
-    }
-    final pick = AwgPick.tryParse(raw);
-    if (pick != null) return pick;
-    Object? decoded;
-    try {
-      decoded = jsonDecode(raw);
-    } catch (_) {}
-    final coreError = decoded is Map ? decoded['error']?.toString() : null;
-    throw _refuse(
-      'AWG_PICK_FAILED',
-      (coreError == null || coreError.isEmpty)
-          ? 'unreadable awg pick'
-          : coreError,
-    );
-  }
-
   // The TUN's own addresses for the engines that terminate it in user space
   // (xray's tun2socks, mihomo's stack): any private pair works. The v6 one
   // is clear of xray's fake-ip pool (fc00::/18).
@@ -916,19 +854,6 @@ class GlitchVpnCore {
         if (kept.any(isV6)) '::/0',
       ],
     );
-  }
-
-  static String _extractWgDns(String config) {
-    for (final raw in config.split('\n')) {
-      final line = raw.trim();
-      if (line.toLowerCase().startsWith('dns')) {
-        final idx = line.indexOf('=');
-        if (idx == -1) continue;
-        final val = line.substring(idx + 1).split(RegExp('[, ;]')).first.trim();
-        if (val.isNotEmpty) return val;
-      }
-    }
-    return '';
   }
 
   /// The TUN fd. A refusal leaves the status at error, not connecting, so the
@@ -996,14 +921,8 @@ class GlitchVpnCore {
   /// The exception's message is the status reason, word for word:
   /// - `ENGINE_NOT_IN_BUILD`, `UNSUPPORTED_STRATEGY` ([balancerStrategiesFor]),
   ///   `UNSUPPORTED_DOMAIN_STRATEGY` ([domainStrategiesFor]),
-  ///   `RELATIVE_GEO_PATH`, `PROXY_NOT_SUPPORTED` (awg with `proxyPort`):
+  ///   `RELATIVE_GEO_PATH`:
   ///   refused before anything starts.
-  /// - `NO_TUNNEL_ADDRESS` (Android: an awg config with only IPv6 addresses
-  ///   and IPv6 off), refused once the status is connecting and the pick is
-  ///   made.
-  /// - `AWG_PICK_FAILED`: the core could not pick an awg link (no link, no
-  ///   `[Interface]` address, an unreadable answer, or a core without the
-  ///   pick); the reason is the core's text.
   /// - `ELEVATION_REQUIRED`: Windows without admin rights; [ensureAdmin] may
   ///   already be relaunching the app elevated.
   /// - `PREPARE_TUNNEL_FAILED`: Android gave no TUN fd.
@@ -1012,7 +931,7 @@ class GlitchVpnCore {
   /// - `BUSY`: a session is connecting or connected and keeps its status.
   /// - Android's code from preparing the tunnel (`DENIED`,
   ///   `NOTIFICATIONS_DENIED`, `TUN_ERROR`, ...); the status reason names it.
-  /// - `XRAY_START_FAILED`, `AWG_START_FAILED`, `MIHOMO_START_FAILED`: the
+  /// - `XRAY_START_FAILED`, `MIHOMO_START_FAILED`: the
   ///   core refused the start; the status reason is its result code.
   ///
   /// [notification] is shown on Android and ignored elsewhere.
@@ -1110,10 +1029,6 @@ class GlitchVpnCore {
         );
       }
 
-      if (proxyPort != null && engine == VpnEngine.awg) {
-        throw _refuse('PROXY_NOT_SUPPORTED', 'awg has no proxy mode (use TUN)');
-      }
-
       _activeProxyUser = '';
       _activeProxyPass = '';
 
@@ -1141,23 +1056,6 @@ class GlitchVpnCore {
             muxConcurrency: muxConcurrency,
             xudpConcurrency: xudpConcurrency,
             fingerprint: fingerprint,
-            resolveExternalIp: resolveExternalIp,
-            ipv4EchoUrl: ipv4EchoUrl,
-            ipv6EchoUrl: ipv6EchoUrl,
-          );
-          break;
-        case VpnEngine.awg:
-          await _connectAwgCore(
-            config,
-            notification: notification,
-            disableIPv6: routing?.disableIPv6 ?? false,
-            dnsAddress: dnsAddress,
-            splitTunnelingType: splitTunnelingType,
-            splitTunnelingApps: splitTunnelingApps,
-            dns: dns,
-            balancerStrategy: balancerStrategy,
-            probeUrl: probeUrl,
-            livenessIntervalSec: livenessIntervalSec,
             resolveExternalIp: resolveExternalIp,
             ipv4EchoUrl: ipv4EchoUrl,
             ipv6EchoUrl: ipv6EchoUrl,
@@ -1404,156 +1302,6 @@ class GlitchVpnCore {
       throw PlatformException(
         code: 'XRAY_START_FAILED',
         message: 'EngineStart(xray)=$res',
-      );
-    }
-  }
-
-  /// Skips [connect]'s checks. Throws `ELEVATION_REQUIRED` on Windows without
-  /// admin rights, and otherwise the codes [connect] lists from preparing the
-  /// tunnel on.
-  Future<void> connectAwg(
-    String config, {
-    required VpnNotificationTexts notification,
-    String? dnsAddress,
-    SplitTunnelingType? splitTunnelingType,
-    List<String>? splitTunnelingApps,
-    VpnRouting? routing,
-  }) async {
-    await _withTransitionLock(() async {
-      await _connectAwgCore(
-        config,
-        notification: notification,
-        disableIPv6: routing?.disableIPv6 ?? false,
-        dnsAddress: dnsAddress,
-        splitTunnelingType: splitTunnelingType,
-        splitTunnelingApps: splitTunnelingApps,
-      );
-    });
-  }
-
-  Future<void> _connectAwgCore(
-    String config, {
-    required VpnNotificationTexts notification,
-    bool disableIPv6 = false,
-    String? dnsAddress,
-    SplitTunnelingType? splitTunnelingType,
-    List<String>? splitTunnelingApps,
-    VpnDns? dns,
-    String balancerStrategy = '',
-    String probeUrl = '',
-    int? livenessIntervalSec,
-    bool resolveExternalIp = true,
-    String ipv4EchoUrl = '',
-    String ipv6EchoUrl = '',
-  }) async {
-    await initialize();
-    if (!await ensureAdmin()) throw _refuseNotElevated();
-
-    final effectiveDns = (dnsAddress ?? _config.dnsAddress).trim();
-    final effectiveSplitType = splitTunnelingType ?? _config.splitTunnelingType;
-    final effectiveSplitApps = splitTunnelingApps ?? _config.splitTunnelingApps;
-
-    // awg is L3 - only a plain resolver applies (no DoH/DoT/fake-ip).
-    String awgDns = '';
-    for (final s in (dns?.servers ?? const <String>[])) {
-      if (!s.contains('://') && s.trim().isNotEmpty) {
-        awgDns = s.trim();
-        break;
-      }
-    }
-    if (awgDns.isEmpty) awgDns = _extractWgDns(config);
-    if (awgDns.isEmpty) awgDns = effectiveDns;
-
-    VpnStatusChannel.instance.emit(VpnStatus.connecting);
-    _resetSessionChannels();
-
-    // The pick probes the pool for seconds. A tunnel with the default
-    // addresses holds the traffic meanwhile, so a reconnect never runs
-    // outside it; the app's own sockets are outside the tunnel on Android,
-    // so the probe still reaches the servers. The pick's own tunnel then
-    // replaces it in place.
-    if (Platform.isAndroid) {
-      final holding = debugTunnelFamilies(const [
-        _tunAddressV4,
-        _tunAddressV6,
-      ], disableIPv6: disableIPv6);
-      await _prepareTunnel({
-        'notification': notification.toMap(),
-        'addresses': holding.addresses,
-        'routes': holding.routes,
-        'dns': awgDns,
-        'splitType': effectiveSplitType.name,
-        'splitApps': effectiveSplitApps,
-      });
-    }
-
-    final awgOpts = <String, String>{
-      if (disableIPv6) 'disableIPv6': '1',
-      if (balancerStrategy.isNotEmpty) 'balancerStrategy': balancerStrategy,
-      if (probeUrl.trim().isNotEmpty) 'probeUrl': probeUrl.trim(),
-      if (livenessIntervalSec != null)
-        'livenessIntervalSec': '$livenessIntervalSec',
-    };
-    _applyIpResolveOpts(
-      awgOpts,
-      resolveExternalIp: resolveExternalIp,
-      ipv4EchoUrl: ipv4EchoUrl,
-      ipv6EchoUrl: ipv6EchoUrl,
-    );
-    final AwgPick pick;
-    try {
-      pick = await debugPickAwgLink(config, awgOpts);
-    } on PlatformException {
-      await _stopTunnelSilently();
-      rethrow;
-    }
-    final plan = debugAwgStartPlan(pick, disableIPv6: disableIPv6);
-    if (Platform.isAndroid && plan.addresses.isEmpty) {
-      await _stopTunnelSilently();
-      throw _refuse(
-        'NO_TUNNEL_ADDRESS',
-        'awg config has only IPv6 addresses and IPv6 is off',
-      );
-    }
-
-    int fd = -1;
-    if (Platform.isAndroid) {
-      try {
-        fd = await _prepareTunnel({
-          'notification': notification.toMap(),
-          'addresses': plan.addresses,
-          'routes': plan.routes,
-          'dns': awgDns,
-          'splitType': effectiveSplitType.name,
-          'splitApps': effectiveSplitApps,
-        });
-      } on Object {
-        await _stopTunnelSilently();
-        rethrow;
-      }
-    }
-    awgOpts['awgPicked'] = plan.awgPicked;
-    final res = await _awaitWithErrorStatus(
-      'EngineStart',
-      () => GlitchVpnCoreFfi.instance.engineStart(
-        'awg',
-        config: config,
-        tunFd: fd,
-        dns: awgDns,
-        logLevel: _config.logLevel,
-        opts: awgOpts,
-      ),
-    );
-    if (res == 0) {
-      _activeTunnel = 'awg';
-    } else {
-      VpnStatusChannel.instance.emit(
-        VpnStatus.error,
-        reason: 'EngineStart=$res',
-      );
-      throw PlatformException(
-        code: 'AWG_START_FAILED',
-        message: 'EngineStart(awg)=$res',
       );
     }
   }
@@ -2167,7 +1915,7 @@ class AndroidAppsPage {
 
 class PingResult {
   final int index;
-  final String engine; // "xray" | "awg" | "mihomo"; "" = none matched
+  final String engine; // "xray" | "mihomo"; "" = none matched
   final bool alive;
   final int delayMs; // meaningful only when alive
   final String? error;
@@ -2190,49 +1938,13 @@ class PingResult {
   );
 }
 
-/// The awg link a start will use, as the core's pick answers: its position in
-/// the pool, the `[Interface]` addresses (IPv4 and IPv6, in order) and whether
-/// any of its peers routes IPv6. The link itself stays in the core.
-class AwgPick {
-  final int index;
-  final List<String> addresses;
-  final bool peersCarryV6;
-  const AwgPick({
-    required this.index,
-    required this.addresses,
-    required this.peersCarryV6,
-  });
-
-  /// Null for anything but a complete answer: an error object, no address, or
-  /// text that is not JSON.
-  static AwgPick? tryParse(String raw) {
-    try {
-      final json = jsonDecode(raw);
-      if (json is! Map) return null;
-      final index = json['index'];
-      final addresses = json['addresses'];
-      if (index is! int || index < 0) return null;
-      if (addresses is! List || addresses.isEmpty) return null;
-      if (addresses.any((a) => a is! String || a.isEmpty)) return null;
-      return AwgPick(
-        index: index,
-        addresses: List<String>.unmodifiable(addresses.cast<String>()),
-        peersCarryV6: json['peersCarryV6'] == true,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-}
-
 /// Engine versions of the loaded core. A field is null for an engine not in
 /// this build, or one the build did not stamp with a version.
 class CoreVersions {
   final String? xrayCore;
-  final String? amneziawg;
   final String? mihomo;
 
-  const CoreVersions({this.xrayCore, this.amneziawg, this.mihomo});
+  const CoreVersions({this.xrayCore, this.mihomo});
 
   static CoreVersions? tryParse(String json) {
     try {
@@ -2246,7 +1958,6 @@ class CoreVersions {
 
       return CoreVersions(
         xrayCore: version('xray_core'),
-        amneziawg: version('amneziawg'),
         mihomo: version('mihomo'),
       );
     } catch (_) {

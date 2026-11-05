@@ -9,7 +9,7 @@ this page is what matters from Dart.
 
 | | Android | Windows | Linux | iOS / macOS |
 |---|---|---|---|---|
-| Engines | xray, awg, mihomo | xray, awg, mihomo | xray, awg, mihomo | — |
+| Engines | xray, mihomo | xray, mihomo | xray, mihomo | — |
 | Data path | VpnService TUN | Wintun or system service | TUN | none |
 | Split tunneling | per app | per process | per process | none |
 
@@ -21,14 +21,6 @@ nothing. A Network Extension is a different data path than the one here.
 Switching engines means disconnecting first — a start against a live different
 engine is refused. Routing and DNS reach the engine only through `connect()`;
 changing a rule means reconnecting. There is no live-update path, deliberately.
-
-## awg ignores most of the config
-
-`VpnRouting`, `VpnDns.hosts`, `VpnDns.directServers`, `domainStrategy`,
-fingerprints, Mux and proxy mode do not apply to AmneziaWG: it is an L3 tunnel
-that takes one plain resolver. `balancerStrategy`, the probe URL, liveness and
-external-IP resolution do apply. `connect()` rejects `proxyPort` on awg rather
-than pretending.
 
 ## Geo databases are your job
 

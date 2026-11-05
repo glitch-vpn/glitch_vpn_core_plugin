@@ -46,7 +46,7 @@ const texts = VpnNotificationTexts(
 
 await core.connect(
   engine: VpnEngine.xray,
-  config: 'vless://…',                     // a share link; awg takes INI or awg://
+  config: 'vless://…',                     // a share link; AmneziaWG and WireGuard take INI or awg://
   notification: texts,
   routing: const VpnRouting(
     tiers: [
@@ -107,8 +107,7 @@ zone and its subdomains), `full:exact.host`, `keyword:str`, `regexp:expr`,
 `process:App.exe`, or a bare IP/CIDR. Plus `localNetworksDirect`,
 `disableIPv6` and `disableUDP` as switches above every tier. On Android, IPv6
 goes through the tunnel unless `disableIPv6` is set, and is then blocked rather
-than let past it. awg reads only this switch of the routing, and it changes
-the tunnel only on Android. A country that should bypass the tunnel is a
+than let past it. A country that should bypass the tunnel is a
 `geoip:<cc>` entry in a tier's `direct` list; there is no separate country
 option.
 
@@ -200,7 +199,7 @@ fails carries its own `error`; a run the core refuses throws `PING_FAILED`);
 split-tunneling picker; `setConnectionInspector` for a per-connection event
 stream; `setLogsVerbosity` and `setMemoryLimit`; `availableEngines()` to hide
 what a given build does not contain; `getCoreVersions()` for the engines'
-versions, where `xrayCore`, `amneziawg` and `mihomo` are each null for an engine
+versions, where `xrayCore` and `mihomo` are each null for an engine
 the build lacks.
 
 Log lines arrive on `onLogsChanged` once `setLogsVerbosity` turns them on. Each

@@ -384,7 +384,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
         fingerprint: _fingerprint,
         muxConcurrency: int.tryParse(_muxCtrl.text.trim()),
         xudpConcurrency: int.tryParse(_xudpCtrl.text.trim()),
-        proxyPort: (_proxyMode && _engine != VpnEngine.awg)
+        proxyPort: _proxyMode
             ? (int.tryParse(_proxyPortCtrl.text.trim()) ?? 10808)
             : null,
         proxyAuth: _proxyAuth,
@@ -407,8 +407,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
     }
   }
 
-  /// Splits the config box into measurable links: one awg INI/awg:// entry, or
-  /// N newline-separated xray links (the balancer input).
+  /// Splits the config box into measurable links: one WireGuard/AmneziaWG INI or
+  /// awg:// entry, or N newline-separated links (the balancer input).
   List<String> _linksFromConfig() {
     final text = _configCtrl.text.trim();
     if (text.isEmpty) return const [];
@@ -507,16 +507,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
               const SizedBox(height: 12),
               _configCard(),
               const SizedBox(height: 12),
-              if (_engine != VpnEngine.awg)
-                _routingCard()
-              else
-                Card(
-                  child: CheckboxListTile(
-                    value: _disableIPv6,
-                    onChanged: (v) => setState(() => _disableIPv6 = v ?? false),
-                    title: const Text('no IPv6'),
-                  ),
-                ),
+              _routingCard(),
               const SizedBox(height: 12),
               _dnsCard(),
               const SizedBox(height: 12),
@@ -570,7 +561,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
           ),
           SelectableText(
             'xray ${_versions.xrayCore ?? '-'} · '
-            'amneziawg ${_versions.amneziawg ?? '-'} · '
             'mihomo ${_versions.mihomo ?? '-'}',
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
@@ -761,7 +751,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
               _sampleButton('vmess', _sampleVmess, VpnEngine.xray),
               _sampleButton('tuic', _sampleTuic, VpnEngine.mihomo),
               _sampleButton('anytls', _sampleAnyTls, VpnEngine.mihomo),
-              _sampleButton('awg', _sampleAwg, VpnEngine.awg),
+              _sampleButton('awg', _sampleAwg, VpnEngine.mihomo),
               TextButton(
                 onPressed: () => setState(() {
                   final t = _configCtrl.text.trim();
@@ -783,12 +773,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
               border: OutlineInputBorder(),
               isDense: true,
               helperText:
-                  'xray/awg: one link, or several awg://|vless:// (newline) → balancer. awg raw INI = single.',
+                  'one link, or several (newline) → balancer. awg raw INI = single.',
             ),
           ),
           const SizedBox(height: 8),
-          // Balancer strategy applies to every engine (awg is a pick-a-winner
-          // balancer over multiple awg:// links); fingerprint/mux stay non-awg.
           Row(
             children: [
               const Text('Balancer:'),
@@ -811,158 +799,155 @@ class _CoreTestPageState extends State<CoreTestPage> {
               ),
             ],
           ),
-          if (_engine != VpnEngine.awg) ...[
+          Row(
+            children: [
+              const Text('Fingerprint:'),
+              const SizedBox(width: 8),
+              DropdownButton<String>(
+                value: _fingerprint,
+                items: [
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('(link default)'),
+                  ),
+                  ...fingerprintsFor(
+                    _engine,
+                  ).map((f) => DropdownMenuItem(value: f, child: Text(f))),
+                ],
+                onChanged: (v) => setState(() => _fingerprint = v!),
+              ),
+            ],
+          ),
+          if (_engine == VpnEngine.xray)
             Row(
               children: [
-                const Text('Fingerprint:'),
+                const Text('Mux:'),
                 const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: _fingerprint,
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('(link default)'),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _muxCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'conc',
+                      helperText: '0 off, <0 XUDP only',
+                      isDense: true,
                     ),
-                    ...fingerprintsFor(
-                      _engine,
-                    ).map((f) => DropdownMenuItem(value: f, child: Text(f))),
-                  ],
-                  onChanged: (v) => setState(() => _fingerprint = v!),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _xudpCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'xudp',
+                      isDense: true,
+                    ),
+                  ),
                 ),
               ],
             ),
-            if (_engine == VpnEngine.xray)
-              Row(
-                children: [
-                  const Text('Mux:'),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 90,
-                    child: TextField(
-                      controller: _muxCtrl,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(fontSize: 13),
-                      decoration: const InputDecoration(
-                        labelText: 'conc',
-                        helperText: '0 off, <0 XUDP only',
-                        isDense: true,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 90,
-                    child: TextField(
-                      controller: _xudpCtrl,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(fontSize: 13),
-                      decoration: const InputDecoration(
-                        labelText: 'xudp',
-                        isDense: true,
-                      ),
-                    ),
-                  ),
-                ],
+          Row(
+            children: [
+              Switch(
+                value: _proxyMode,
+                onChanged: (v) => setState(() => _proxyMode = v),
               ),
-            Row(
-              children: [
-                Switch(
-                  value: _proxyMode,
-                  onChanged: (v) => setState(() => _proxyMode = v),
+              const Text('Proxy mode (no TUN)'),
+              const SizedBox(width: 8),
+              if (_proxyMode)
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _proxyPortCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'port',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ),
-                const Text('Proxy mode (no TUN)'),
-                const SizedBox(width: 8),
-                if (_proxyMode)
-                  SizedBox(
-                    width: 90,
+              if (_proxyMode)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Checkbox(
+                      value: _proxyAuth,
+                      visualDensity: VisualDensity.compact,
+                      onChanged: (v) => setState(() => _proxyAuth = v ?? true),
+                    ),
+                    const Text('auth', style: TextStyle(fontSize: 12)),
+                  ],
+                ),
+              if (_proxyMode && _proxyAuth)
+                SizedBox(
+                  width: 110,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 6),
                     child: TextField(
-                      controller: _proxyPortCtrl,
-                      keyboardType: TextInputType.number,
+                      controller: _proxyUserCtrl,
                       style: const TextStyle(fontSize: 13),
                       decoration: const InputDecoration(
-                        labelText: 'port',
+                        labelText: 'user (rnd)',
                         isDense: true,
                         border: OutlineInputBorder(),
                       ),
                     ),
                   ),
-                if (_proxyMode)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Checkbox(
-                        value: _proxyAuth,
-                        visualDensity: VisualDensity.compact,
-                        onChanged: (v) =>
-                            setState(() => _proxyAuth = v ?? true),
-                      ),
-                      const Text('auth', style: TextStyle(fontSize: 12)),
-                    ],
-                  ),
-                if (_proxyMode && _proxyAuth)
-                  SizedBox(
-                    width: 110,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: TextField(
-                        controller: _proxyUserCtrl,
-                        style: const TextStyle(fontSize: 13),
-                        decoration: const InputDecoration(
-                          labelText: 'user (rnd)',
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_proxyMode && _proxyAuth)
-                  SizedBox(
-                    width: 110,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: TextField(
-                        controller: _proxyPassCtrl,
-                        style: const TextStyle(fontSize: 13),
-                        decoration: const InputDecoration(
-                          labelText: 'pass (rnd)',
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            if (_proxyMode)
-              Padding(
-                padding: const EdgeInsets.only(top: 4, left: 4),
-                child: Builder(
-                  builder: (_) {
-                    final creds = GlitchVpnCore.instance.proxyCredentials;
-                    final port = _proxyPortCtrl.text.trim();
-                    final String url;
-                    if (!_proxyAuth) {
-                      url =
-                          'socks5://127.0.0.1:$port - no auth (open to local apps)';
-                    } else if (creds != null) {
-                      url =
-                          'socks5://${creds.user}:${creds.pass}@127.0.0.1:$port';
-                    } else {
-                      url =
-                          'socks5://<user>:<pass>@127.0.0.1:$port - empty fields = random; creds shown here after connect';
-                    }
-                    return SelectableText(
-                      url,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey,
-                        fontFamily: 'monospace',
-                      ),
-                    );
-                  },
                 ),
+              if (_proxyMode && _proxyAuth)
+                SizedBox(
+                  width: 110,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: TextField(
+                      controller: _proxyPassCtrl,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'pass (rnd)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (_proxyMode)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 4),
+              child: Builder(
+                builder: (_) {
+                  final creds = GlitchVpnCore.instance.proxyCredentials;
+                  final port = _proxyPortCtrl.text.trim();
+                  final String url;
+                  if (!_proxyAuth) {
+                    url =
+                        'socks5://127.0.0.1:$port - no auth (open to local apps)';
+                  } else if (creds != null) {
+                    url =
+                        'socks5://${creds.user}:${creds.pass}@127.0.0.1:$port';
+                  } else {
+                    url =
+                        'socks5://<user>:<pass>@127.0.0.1:$port - empty fields = random; creds shown here after connect';
+                  }
+                  return SelectableText(
+                    url,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey,
+                      fontFamily: 'monospace',
+                    ),
+                  );
+                },
               ),
-          ],
+            ),
         ],
       ),
     ),
@@ -1341,9 +1326,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
               if (_engine != VpnEngine.mihomo)
                 Expanded(
                   child: Text(
-                    _engine == VpnEngine.awg
-                        ? '  (awg: first plain server only)'
-                        : '  (xray: mode ignored)',
+                    '  (xray: mode ignored)',
                     style: const TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                 ),
@@ -1361,13 +1344,13 @@ class _CoreTestPageState extends State<CoreTestPage> {
               '*.lan, geosite:private',
             ),
           _geoField(
-            'hosts (name=ip1,ip2 per line; awg ignores)',
+            'hosts (name=ip1,ip2 per line)',
             _dnsHostsCtrl,
             'dns.google=8.8.8.8,8.8.4.4',
             maxLines: 3,
           ),
           _geoField(
-            'direct resolvers (csv; for direct-routed names, awg ignores)',
+            'direct resolvers (csv; for direct-routed names)',
             _dnsDirectServersCtrl,
             '77.88.8.8',
           ),
@@ -1413,9 +1396,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
               isDense: true,
             ),
           ),
-          // Probe cadence and external-IP resolution apply to every engine,
-          // awg included, so they live here rather than in the routing card
-          // (which xray/mihomo own).
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Row(
@@ -1536,7 +1516,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   }
 
   String _shortLink(String link) {
-    if (link.contains('[Interface]')) return 'awg config';
+    if (link.contains('[Interface]')) return 'WireGuard config';
     final hash = link.indexOf('#');
     if (hash >= 0 && hash < link.length - 1) {
       return Uri.decodeComponent(link.substring(hash + 1));

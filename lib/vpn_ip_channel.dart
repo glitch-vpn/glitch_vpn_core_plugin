@@ -5,8 +5,8 @@ import 'package:flutter/foundation.dart';
 /// External addresses observed through the tunnel (IPEvent 303).
 ///
 /// A missing address always comes with its error: 'disabled' (IPv6 was turned
-/// off for the session), 'unsupported' (no in-tunnel HTTP path - awg on
-/// Android), or the fetch failure text.
+/// off for the session), 'unsupported' (no in-tunnel HTTP path),
+/// or the fetch failure text.
 class VpnExternalIp {
   final String? ipv4;
   final String? ipv6;

@@ -36,7 +36,7 @@ void main() {
 
     test('single server payload', () {
       final sel = VpnServerSelection.tryParse(
-        '{"engine":"awg","total":1,'
+        '{"engine":"mihomo","total":1,'
         '"selected":{"index":0,"host":"wg.example.com","port":51820,"protocol":"awg"},'
         '"servers":[{"index":0,"host":"wg.example.com","port":51820,"protocol":"awg"}]}',
       );

@@ -589,8 +589,7 @@ class GlitchVpnService : VpnService() {
             } else {
                 val engineFd = pfd.getFd()
 
-                // A second start while a tunnel is held (the awg pick's holding
-                // tunnel): establish() has replaced that interface in place,
+                // A second start while a tunnel is held: establish() has replaced that interface in place,
                 // so its descriptor is released only now.
                 val replaced = ownerPfd
                 tunFd = engineFd
@@ -615,8 +614,8 @@ class GlitchVpnService : VpnService() {
         }
     }
 
-    // A start that fails while an earlier one's tunnel is held (the awg
-    // pick's holding tunnel) must not leave that tunnel up with no engine.
+    // A start that fails while an earlier one's tunnel is held must not
+    // leave that tunnel up with no engine.
     private fun releaseHeldTunnel() {
         try { ownerPfd?.close() } catch (t: Throwable) {
             Log.w(TAG, "held PFD close error: ${t.message}")

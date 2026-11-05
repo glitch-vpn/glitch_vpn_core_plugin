@@ -132,7 +132,7 @@ if (livenessIntervalSec != null) opts['livenessIntervalSec'] = '$livenessInterva
   units, when the stream fires, platform limits. Not a restatement of the
   name.
 - Internals follow the silence rule: a comment carries a WHY or a trap
-  (`// awg is L3 - only a plain resolver applies`), or it does not exist.
+  (`// the core reads this opt only on Android`), or it does not exist.
 - No comments on one-line getters and trivial functions.
 
 ## 7. Tests

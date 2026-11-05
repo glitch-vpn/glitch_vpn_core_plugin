@@ -126,9 +126,8 @@ void main() {
   });
 
   test('balancer strategies and fingerprints are gated per engine', () {
-    expect(balancerStrategiesFor(VpnEngine.awg), contains('leastping'));
+    expect(balancerStrategiesFor(VpnEngine.xray), contains('leastping'));
     expect(balancerStrategiesFor(VpnEngine.mihomo), contains('url-test'));
-    expect(fingerprintsFor(VpnEngine.awg), isEmpty);
     expect(fingerprintsFor(VpnEngine.xray), contains('chrome'));
   });
 
@@ -139,7 +138,6 @@ void main() {
       'ipondemand',
     ]);
     expect(domainStrategiesFor(VpnEngine.mihomo), isEmpty);
-    expect(domainStrategiesFor(VpnEngine.awg), isEmpty);
   });
 
   test('geoAssetsDir absolute-path check follows the target platform', () {
@@ -192,11 +190,7 @@ void main() {
       return GlitchVpnCore.engineIds();
     }
 
-    expect(await read('{"engines":["xray","awg","mihomo"]}'), {
-      'xray',
-      'awg',
-      'mihomo',
-    });
+    expect(await read('{"engines":["xray","mihomo"]}'), {'xray', 'mihomo'});
     expect(await read('{"engines":[]}'), isEmpty);
     expect(await read('not json'), isEmpty);
     expect(await read('[1,2,3]'), isEmpty);
@@ -221,80 +215,17 @@ void main() {
     // The failure was not cached: the next call retries and gets the real set.
     GlitchVpnCore.debugCapabilitiesJsonProvider = () async {
       calls++;
-      return '{"engines":["xray","awg"]}';
+      return '{"engines":["xray","mihomo"]}';
     };
-    expect(await GlitchVpnCore.engineIds(), {'xray', 'awg'});
+    expect(await GlitchVpnCore.engineIds(), {'xray', 'mihomo'});
     expect(calls, 2);
 
     // The non-empty set is cached: no further reads.
-    expect(await GlitchVpnCore.engineIds(), {'xray', 'awg'});
+    expect(await GlitchVpnCore.engineIds(), {'xray', 'mihomo'});
     expect(calls, 2);
   });
 
   group('Android tunnel families', () {
-    test('the pick answer carries the chosen link and its addresses', () {
-      final pick = AwgPick.tryParse(
-        '{"index":2,'
-        '"addresses":["10.20.0.2/32","fd20::2/128"],"peersCarryV6":true}',
-      )!;
-      expect(pick.index, 2);
-      expect(pick.addresses, ['10.20.0.2/32', 'fd20::2/128']);
-      expect(pick.peersCarryV6, isTrue);
-    });
-
-    test('a pick without IPv6 peers says so', () {
-      final pick = AwgPick.tryParse(
-        '{"index":0,"addresses":["10.20.0.2/32"]}',
-      )!;
-      expect(pick.peersCarryV6, isFalse);
-    });
-
-    test('a v4-only pick drops the v6 address and its route', () {
-      final plan = GlitchVpnCore.debugAwgStartPlan(
-        const AwgPick(
-          index: 1,
-          addresses: ['10.20.0.2/32', 'fd20::2/128'],
-          peersCarryV6: false,
-        ),
-        disableIPv6: false,
-      );
-      expect(plan.addresses, ['10.20.0.2/32']);
-      expect(plan.routes, ['0.0.0.0/0']);
-      expect(plan.awgPicked, '1');
-    });
-
-    test('a dual-stack pick keeps both families', () {
-      final plan = GlitchVpnCore.debugAwgStartPlan(
-        const AwgPick(
-          index: 0,
-          addresses: ['10.20.0.2/32', 'fd20::2/128'],
-          peersCarryV6: true,
-        ),
-        disableIPv6: false,
-      );
-      expect(plan.addresses, ['10.20.0.2/32', 'fd20::2/128']);
-      expect(plan.routes, ['0.0.0.0/0', '::/0']);
-    });
-
-    test('IPv6 off drops the v6 address even when peers carry it', () {
-      final plan = GlitchVpnCore.debugAwgStartPlan(
-        const AwgPick(index: 0, addresses: ['fd20::2/128'], peersCarryV6: true),
-        disableIPv6: true,
-      );
-      expect(plan.addresses, isEmpty);
-      expect(plan.routes, isEmpty);
-    });
-
-    test('an error, no address or garbage is no pick', () {
-      expect(AwgPick.tryParse('{"error":"no awg link"}'), isNull);
-      expect(AwgPick.tryParse('{"index":0,"addresses":[]}'), isNull);
-      expect(AwgPick.tryParse('{"index":-1,"addresses":["x"]}'), isNull);
-      expect(AwgPick.tryParse('{"index":0}'), isNull);
-      expect(AwgPick.tryParse('[]'), isNull);
-      expect(AwgPick.tryParse('not json'), isNull);
-      expect(AwgPick.tryParse(''), isNull);
-    });
-
     test('a v6-only config with IPv6 off keeps no address', () {
       final t = GlitchVpnCore.debugTunnelFamilies([
         'fd10::2/128',
@@ -387,19 +318,15 @@ void main() {
   group('CoreVersions', () {
     test('reads every engine the core reports', () {
       final v = CoreVersions.tryParse(
-        '{"xray_core":"25.3.6","amneziawg":"0.2.12","mihomo":"1.19.2"}',
+        '{"xray_core":"25.3.6","mihomo":"1.19.2"}',
       )!;
       expect(v.xrayCore, '25.3.6');
-      expect(v.amneziawg, '0.2.12');
       expect(v.mihomo, '1.19.2');
     });
 
     test('an engine absent or reported unknown is null', () {
-      final v = CoreVersions.tryParse(
-        '{"xray_core":"unknown","amneziawg":" "}',
-      )!;
+      final v = CoreVersions.tryParse('{"xray_core":"unknown","mihomo":" "}')!;
       expect(v.xrayCore, isNull);
-      expect(v.amneziawg, isNull);
       expect(v.mihomo, isNull);
     });
 
@@ -414,7 +341,6 @@ void main() {
           throw ArgumentError('library did not load');
       final failed = await GlitchVpnCore.getCoreVersions();
       expect(failed.xrayCore, isNull);
-      expect(failed.amneziawg, isNull);
       expect(failed.mihomo, isNull);
 
       GlitchVpnCore.debugCoreVersionsJsonProvider = () async => 'not json';

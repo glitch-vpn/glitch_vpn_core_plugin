@@ -37,7 +37,7 @@ class VpnServerInfo {
 /// per connection (xray random/roundrobin, mihomo load-balance) - the pool
 /// and strategy are still reported.
 class VpnServerSelection {
-  final String engine; // xray | awg | mihomo
+  final String engine; // xray | mihomo
   final String strategy; // '' for a single link
   final int total;
   final VpnServerInfo? selected;

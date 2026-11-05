@@ -6,7 +6,7 @@ Rules for agents working in this repository. These override default behaviour.
 
 glitch_vpn_core is a Flutter FFI plugin around the
 [libglitchcore](https://github.com/glitch-vpn/libglitchcore) Go core. One Dart
-API drives the xray / awg / mihomo engines on Android, Windows and Linux. The
+API drives the xray / mihomo engines (AmneziaWG and WireGuard links run on mihomo) on Android, Windows and Linux. The
 app repo (`Glitch-VPN/mobile`) consumes it as a pinned git dependency.
 
 This plugin is about **connectivity, not UI**. The `example/` app is a test
@@ -49,10 +49,10 @@ does.
 5. **No secrets in logs.** Share links and configs carry credentials — never
    `debugPrint` a config, never embed one in an exception message or a
    notification.
-6. **An engine-agnostic `connect()` option reaches all three engine paths.**
-   `_connectXrayCore`, `_connectAwgCore` and `_connectMihomoCore` assemble
-   opts separately; a param added to one and silently dropped in another is
-   how awg lost `balancerStrategy`.
+6. **An engine-agnostic `connect()` option reaches both engine paths.**
+   `_connectXrayCore` and `_connectMihomoCore` assemble opts separately; a
+   param added to one and silently dropped in the other is how a knob goes
+   dead on one engine.
 7. **A feature is not done without the example app.** Core event → Dart API →
    example UI, one change. The owner verifies hands-on; an API without
    example plumbing is not checkable.
@@ -93,10 +93,8 @@ wiki/                         # user-facing docs (GitHub wiki page names);
 - On reattach (hot restart, app relaunch over a live tunnel, Windows service)
   the core **replays** connected + 302 + 303 + stats when the status port is
   registered — `initialize()` is all an app needs to restore state.
-- Proxy mode (`proxyPort`) has no TUN and no elevation; awg rejects it.
-- awg ignores routing apart from `disableIPv6`, and DNS apart from one
-  plain resolver; validate
-  `balancerStrategy`/`fingerprint`/`domainStrategy` via
+- Proxy mode (`proxyPort`) has no TUN and no elevation.
+- Validate `balancerStrategy`/`fingerprint`/`domainStrategy` via
   `balancerStrategiesFor` / `fingerprintsFor` / `domainStrategiesFor` before
   connecting.
 - Geo assets are the app's responsibility: `connect(geoAssetsDir:)` points the

@@ -38,9 +38,8 @@ Rank findings by what they cost:
    reattach replay (fires on `initialize()` over a live tunnel) is dropped.
    Check both directions on any lifecycle change.
 3. **An option lost on one engine path.** `connect()` params are assembled
-   into opts separately in `_connectXrayCore` / `_connectAwgCore` /
-   `_connectMihomoCore`. Trace every new or renamed param through all three;
-   awg dropping `balancerStrategy` shipped exactly this way.
+   into opts separately in `_connectXrayCore` /
+   `_connectMihomoCore`. Trace every new or renamed param through both.
 4. **Bindings and pinning.** Any hand edit to
    `lib/src/bindings_generated.dart` (only ffigen may write it). A
    `libglitchcore_version` bump without the matching `libglitchcore_sha256`
@@ -48,7 +47,7 @@ Rank findings by what they cost:
    not export.
 5. **Secrets escape.** Configs and share links carry credentials. Grep the
    diff for `debugPrint`, `log`, exception messages and notification text
-   near `config`, `link`, `proxyUser`/`proxyPass`, `awgDns`. Credentials in
+   near `config`, `link`, `proxyUser`/`proxyPass`. Credentials in
    `PlatformException.message` reach crash logs.
 6. **Platform boundary.** Android: a TUN fd of `-1` reaching `engineStart`;
    permission errors (`NEEDS_PERMISSION`) surfaced as generic failures;

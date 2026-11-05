@@ -6,8 +6,8 @@ A Flutter plugin for building VPN clients. You write the app; the plugin brings
 up the tunnel, routes traffic and streams back what a UI needs to show — status,
 speed, the server you are on, the exit IP as seen from outside.
 
-One Dart API drives three protocol engines — **Xray** (VLESS, VMess, Trojan,
-Shadowsocks), **AmneziaWG** and **mihomo** (Hysteria2, TUIC, AnyTLS) — on
+One Dart API drives two protocol engines — **Xray** (VLESS, VMess, Trojan,
+Shadowsocks) and **mihomo** (Hysteria2, TUIC, AnyTLS, WireGuard, AmneziaWG) — on
 Android, Windows and Linux. Switching engines is a parameter, not a rewrite.
 
 ```dart
@@ -65,6 +65,5 @@ assistance — openly, and held to the same gate as anything else.
 ## License
 
 Plugin: MIT ([LICENSE](LICENSE)). The loaded core binaries are a separate work —
-compositions containing xray or mihomo are GPL-3.0, an awg-only build is
-permissive. See the [core repo](https://github.com/glitch-vpn/libglitchcore) for
+compositions containing xray or mihomo are GPL-3.0. See the [core repo](https://github.com/glitch-vpn/libglitchcore) for
 per-composition attribution.

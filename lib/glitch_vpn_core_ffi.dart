@@ -231,10 +231,6 @@ class GlitchVpnCoreFfi {
   static Future<String> measurePings(String requestJson) =>
       Isolate.run(() => _callJsonExportSync('MeasurePings', requestJson, '[]'));
 
-  // Probes a pool, like measurePings - keep off the UI isolate.
-  static Future<String> awgPick(String requestJson) =>
-      Isolate.run(() => _callJsonExportSync('AwgPick', requestJson, '{}'));
-
   // [symbol] is one of the core's string-in, string-out exports; [emptyAnswer]
   // stands for a null return.
   @pragma('vm:entry-point')

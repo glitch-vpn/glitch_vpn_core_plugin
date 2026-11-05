@@ -10,7 +10,7 @@ class VpnStats {
   final int rssBytes; // process RSS; 0 if unavailable
   final int goMemBytes; // Go heap from OS; 0 if unavailable
   final bool? linkUp; // null until first conclusive liveness observation
-  final int probeMs; // -1 unknown / passive (awg Android)
+  final int probeMs; // -1 unknown
   final DateTime at;
   const VpnStats({
     required this.downloadBytes,
