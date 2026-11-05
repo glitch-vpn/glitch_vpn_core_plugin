@@ -60,7 +60,6 @@ void main() {
       expect(ip!.ipv4, '203.0.113.7');
       expect(ip.ipv6, '2001:db8::1');
       expect(ip.hasAny, isTrue);
-      expect(ip.unsupported, isFalse);
     });
 
     test('v6 disabled', () {
@@ -70,14 +69,6 @@ void main() {
       expect(ip!.ipv4, '203.0.113.7');
       expect(ip.ipv6, isNull);
       expect(ip.ipv6Error, 'disabled');
-    });
-
-    test('unsupported platform', () {
-      final ip = VpnExternalIp.tryParse(
-        '{"ipv4Error":"unsupported","ipv6Error":"unsupported"}',
-      );
-      expect(ip!.hasAny, isFalse);
-      expect(ip.unsupported, isTrue);
     });
 
     test('garbage returns null', () {

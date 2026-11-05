@@ -688,12 +688,6 @@ class _CoreTestPageState extends State<CoreTestPage> {
             valueListenable: VpnIpChannel.instance.listenable,
             builder: (context, ip, _) {
               if (ip == null) return const SizedBox.shrink();
-              if (ip.unsupported) {
-                return const Text(
-                  'external IP: not resolvable on this engine/platform',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                );
-              }
               final v4 = ip.ipv4 ?? '- (${ip.ipv4Error ?? '?'})';
               final v6 = ip.ipv6 ?? '- (${ip.ipv6Error ?? '?'})';
               return Text(
