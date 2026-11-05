@@ -2016,6 +2016,28 @@ class GlitchVpnCore {
     return page;
   }
 
+  static final _androidPackageName = RegExp(
+    r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
+  );
+
+  /// Whether [name] is a well-formed Android package name of at most 255
+  /// characters; anything else is never sent to the system.
+  @visibleForTesting
+  static bool isAndroidPackageName(String name) =>
+      name.length <= 255 && _androidPackageName.hasMatch(name);
+
+  /// The subset of [packageNames] installed on this device, system apps
+  /// included, without loading any label. Names that are not well-formed
+  /// package names are dropped without asking the system. Empty off Android.
+  Future<Set<String>> appsInstalled(List<String> packageNames) async {
+    final names = packageNames.where(isAndroidPackageName).toList();
+    if (!Platform.isAndroid || names.isEmpty) return const <String>{};
+    final res = await _ch.invokeMethod<List<dynamic>>('appsInstalled', {
+      'packages': names,
+    });
+    return {for (final pkg in res ?? const []) pkg.toString()};
+  }
+
   Future<Map<String, Uint8List>> appsIcon(
     List<String> packageNames,
     void Function(Map<String, Uint8List>)? callback,

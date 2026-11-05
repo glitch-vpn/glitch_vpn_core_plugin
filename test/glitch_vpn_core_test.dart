@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,8 @@ import 'package:glitch_vpn_core/glitch_vpn_core.dart';
 import 'package:glitch_vpn_core/vpn_conn_channel.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('VpnRouting.toOpts', () {
     test('a single tier goes out as a one-element routingTiers', () {
       final opts = const VpnRouting(
@@ -511,5 +514,39 @@ void main() {
       '{"engine":"xray","host":"ads.example","outbound":"block","status":"rejected"}',
     );
     expect(blocked!.blocked, isTrue);
+  });
+
+  test(
+    'appsInstalled answers an empty set without asking the platform off Android',
+    () async {
+      const channel = MethodChannel('glitch_vpn_core');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return <String>['com.example.app'];
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      expect(await GlitchVpnCore.instance.appsInstalled(const []), isEmpty);
+      expect(
+        await GlitchVpnCore.instance.appsInstalled(const ['com.example.app']),
+        isEmpty,
+      );
+      expect(calls, isEmpty);
+    },
+    skip: Platform.isAndroid ? 'the platform answers on Android' : null,
+  );
+
+  test('isAndroidPackageName accepts the package grammar and nothing else', () {
+    expect(GlitchVpnCore.isAndroidPackageName('com.example.app_1'), isTrue);
+    expect(GlitchVpnCore.isAndroidPackageName('app'), isFalse);
+    expect(GlitchVpnCore.isAndroidPackageName('com..app'), isFalse);
+    expect(GlitchVpnCore.isAndroidPackageName('com.1app'), isFalse);
+    expect(GlitchVpnCore.isAndroidPackageName(''), isFalse);
+    expect(GlitchVpnCore.isAndroidPackageName('com.${'a' * 300}'), isFalse);
+    expect(GlitchVpnCore.isAndroidPackageName('com.${'a' * 700000}'), isFalse);
   });
 }

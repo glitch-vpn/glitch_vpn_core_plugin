@@ -153,6 +153,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
   >
   _extraTiers = [];
   final _geoAssetsDirCtrl = TextEditingController();
+  final _packageProbeCtrl = TextEditingController();
+  String? _packageProbeResult;
   final _dnsServersCtrl = TextEditingController(text: '1.1.1.1');
   final _fakeIpFilterCtrl = TextEditingController();
   final _dnsHostsCtrl = TextEditingController();
@@ -193,6 +195,17 @@ class _CoreTestPageState extends State<CoreTestPage> {
   StreamSubscription? _connSub;
   StreamSubscription? _serverSub;
   bool _notificationGerman = false;
+
+  Future<void> _probePackages() async {
+    final names = _packageProbeCtrl.text
+        .split(RegExp(r'[\s,]+'))
+        .where((name) => name.isNotEmpty)
+        .toList();
+    final installed = await GlitchVpnCore.instance.appsInstalled(names);
+    if (!mounted) return;
+    setState(() => _packageProbeResult = 'installed: ${installed.toList()}');
+  }
+
   VpnAlwaysOn? _alwaysOn;
   bool _inspector = false;
   String _logFilter = '';
@@ -452,6 +465,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
       t.proxy.dispose();
     }
     _geoAssetsDirCtrl.dispose();
+    _packageProbeCtrl.dispose();
     _dnsServersCtrl.dispose();
     _fakeIpFilterCtrl.dispose();
     _dnsHostsCtrl.dispose();
@@ -598,6 +612,28 @@ class _CoreTestPageState extends State<CoreTestPage> {
               child: Text(
                 'Notification texts: ${_notificationGerman ? 'German' : 'English'}',
               ),
+            ),
+          if (Platform.isAndroid)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _packageProbeCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'package names (installed check)',
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _probePackages,
+                  child: const Text('check'),
+                ),
+              ],
+            ),
+          if (Platform.isAndroid && _packageProbeResult != null)
+            SelectableText(
+              _packageProbeResult!,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           if (_connectRefusal != null)
             SelectableText(

@@ -98,6 +98,17 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         return hashMapOf("items" to out, "total" to total)
     }
 
+    private val packageNameGrammar = Regex("""[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+""")
+
+    private fun filterInstalledPackages(packages: List<Any?>): List<String> {
+        val pm = appContext?.packageManager ?: return emptyList()
+        return packages.filterIsInstance<String>().distinct().filter { pkg ->
+            if (pkg.length > 255 || !packageNameGrammar.matches(pkg)) return@filter false
+            try { pm.getApplicationInfo(pkg, 0); true }
+            catch (_: Throwable) { false }
+        }
+    }
+
     private fun loadAppIcons(packages: List<String>): Map<String, ByteArray> {
         val ctx = appContext ?: return emptyMap()
         val pm = ctx.packageManager
@@ -301,6 +312,18 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 bgExecutor.execute {
                     val list = loadInstalledApps(offset, limit, includeSystem, query)
                     mainHandler.post { result.success(list) }
+                }
+            }
+
+            "appsInstalled" -> {
+                val packages = call.argument<List<Any?>>("packages") ?: emptyList()
+                bgExecutor.execute {
+                    val installed = try {
+                        filterInstalledPackages(packages)
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    mainHandler.post { result.success(installed) }
                 }
             }
 
