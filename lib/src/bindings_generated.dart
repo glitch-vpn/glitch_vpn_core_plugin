@@ -78,21 +78,6 @@ class GlitchCoreBindings {
         ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
       >();
 
-  ffi.Pointer<ffi.Char> AwgPick(ffi.Pointer<ffi.Char> cRequestJSON) {
-    return _AwgPick(cRequestJSON);
-  }
-
-  late final _AwgPickPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
-        >
-      >('AwgPick');
-  late final _AwgPick =
-      _AwgPickPtr.asFunction<
-        ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
-      >();
-
   int EngineStart(
     ffi.Pointer<ffi.Char> cEngineID,
     ffi.Pointer<ffi.Char> cRequestJSON,
