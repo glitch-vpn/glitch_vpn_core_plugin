@@ -160,16 +160,149 @@ enum MemoryLimit {
 /// match on label boundaries, so `domain:ru` covers `ru` and every `*.ru`;
 /// dots around the zone are stripped (`.ru` ≡ `ru`). `keyword:` is a
 /// substring and keeps its dots.
+///
+/// [routes] send matched flows to a named target of [VpnRouting.targets]; in a
+/// tier block beats direct beats routes (in list order) beats proxy. A route
+/// takes no `process:` matcher. Needs [GlitchVpnCore.routeTargetsSupported].
 class VpnRoutingTier {
   final List<String> block;
   final List<String> direct;
+  final List<VpnRoute> routes;
   final List<String> proxy;
 
   const VpnRoutingTier({
     this.block = const [],
     this.direct = const [],
+    this.routes = const [],
     this.proxy = const [],
   });
+}
+
+/// Flows matching any of [match] leave through the target [to] names: a
+/// server, a group or a chain of [VpnRouteTargets].
+class VpnRoute {
+  final String to;
+  final List<String> match;
+
+  const VpnRoute({required this.to, required this.match});
+}
+
+/// A server a route, a group or a chain can name. [id] is the caller's,
+/// 1-16 characters of a-z and 0-9, unique across servers, groups and chains.
+class VpnRouteServer {
+  final String id;
+  final String link;
+
+  const VpnRouteServer({required this.id, required this.link});
+}
+
+/// Balances over [servers] (ids of [VpnRouteServer]) with the session's
+/// balancer strategy.
+class VpnRouteGroup {
+  final String id;
+  final List<String> servers;
+
+  const VpnRouteGroup({required this.id, required this.servers});
+}
+
+/// The first hop is dialled directly and each later hop through the one
+/// before it; the last exits. [hops] are ids of [VpnRouteServer], 2 to 4,
+/// none twice.
+class VpnRouteChain {
+  final String id;
+  final List<String> hops;
+
+  const VpnRouteChain({required this.id, required this.hops});
+}
+
+/// The named outcomes the routes of [VpnRouting.tiers] can send to.
+class VpnRouteTargets {
+  static const int maxServers = 64;
+  static const int maxGroups = 16;
+  static const int maxChains = 16;
+  static const int minChainHops = 2;
+  static const int maxChainHops = 4;
+  static final RegExp _idPattern = RegExp(r'^[a-z0-9]{1,16}$');
+
+  final List<VpnRouteServer> servers;
+  final List<VpnRouteGroup> groups;
+  final List<VpnRouteChain> chains;
+
+  const VpnRouteTargets({
+    this.servers = const [],
+    this.groups = const [],
+    this.chains = const [],
+  });
+
+  bool get isEmpty => servers.isEmpty && groups.isEmpty && chains.isEmpty;
+
+  /// What the core would refuse, or null. Mirrors the core's targets
+  /// validation, so a bad set fails before a start rather than in it.
+  String? validationError() {
+    if (servers.length > maxServers) return 'more than $maxServers servers';
+    if (groups.length > maxGroups) return 'more than $maxGroups groups';
+    if (chains.length > maxChains) return 'more than $maxChains chains';
+    final seen = <String>{};
+    String? claim(String id) {
+      if (!_idPattern.hasMatch(id)) {
+        return 'id "$id" must be 1-16 characters of a-z and 0-9';
+      }
+      if (!seen.add(id)) return 'duplicate id "$id"';
+      return null;
+    }
+
+    final serverIds = <String>{};
+    for (final s in servers) {
+      final error = claim(s.id);
+      if (error != null) return error;
+      if (s.link.trim().isEmpty) return 'server "${s.id}" has no link';
+      serverIds.add(s.id);
+    }
+    for (final g in groups) {
+      final error = claim(g.id);
+      if (error != null) return error;
+      if (g.servers.isEmpty) return 'group "${g.id}" is empty';
+      for (final m in g.servers) {
+        if (!serverIds.contains(m)) {
+          return 'group "${g.id}" names unknown server "$m"';
+        }
+      }
+    }
+    for (final c in chains) {
+      final error = claim(c.id);
+      if (error != null) return error;
+      if (c.hops.length < minChainHops || c.hops.length > maxChainHops) {
+        return 'chain "${c.id}" has ${c.hops.length} hops, '
+            'want $minChainHops..$maxChainHops';
+      }
+      final hopsSeen = <String>{};
+      for (final h in c.hops) {
+        if (!serverIds.contains(h)) {
+          return 'chain "${c.id}" names unknown server "$h"';
+        }
+        if (!hopsSeen.add(h)) return 'chain "${c.id}" names server "$h" twice';
+      }
+    }
+    return null;
+  }
+
+  bool containsId(String id) =>
+      servers.any((s) => s.id == id) ||
+      groups.any((g) => g.id == id) ||
+      chains.any((c) => c.id == id);
+
+  Map<String, dynamic> toJson() => {
+    'version': 1,
+    'servers': [
+      for (final s in servers) {'id': s.id, 'link': s.link},
+    ],
+    'groups': [
+      for (final g in groups) {'id': g.id, 'servers': g.servers},
+    ],
+    'chains': [
+      for (final c in chains) {'id': c.id, 'hops': c.hops},
+    ],
+  };
 }
 
 /// Routing rules. Tiers are
@@ -185,6 +318,9 @@ class VpnRouting {
   /// Ordered rule groups, first evaluated first.
   final List<VpnRoutingTier> tiers;
 
+  /// What the routes of [tiers] name; any route needs it.
+  final VpnRouteTargets? targets;
+
   /// RFC1918/CGNAT/loopback → direct.
   final bool localNetworksDirect;
 
@@ -199,26 +335,67 @@ class VpnRouting {
   const VpnRouting({
     this.mode = '',
     this.tiers = const [],
+    this.targets,
     this.localNetworksDirect = false,
     this.disableIPv6 = false,
     this.disableUDP = false,
   });
 
+  static List<String> _clean(List<String> v) =>
+      v.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
+  /// True when a route or a target is set.
+  bool get usesTargets =>
+      !(targets?.isEmpty ?? true) || tiers.any((t) => t.routes.isNotEmpty);
+
+  /// What the core would refuse in the targets and the routes, or null.
+  /// [GlitchVpnCore.connect] refuses with `INVALID_ROUTING` on it and
+  /// [toOpts] throws [ArgumentError].
+  String? validationError() {
+    final targetsError = targets?.validationError();
+    if (targetsError != null) return 'targets: $targetsError';
+    for (var i = 0; i < tiers.length; i++) {
+      for (final r in tiers[i].routes) {
+        if (!(targets?.containsId(r.to) ?? false)) {
+          return 'tier ${i + 1}: route names undefined id "${r.to}"';
+        }
+        final match = _clean(r.match);
+        if (match.isEmpty) {
+          return 'tier ${i + 1}: route to "${r.to}" matches nothing';
+        }
+        for (final m in match) {
+          if (m.toLowerCase().startsWith('process:')) {
+            return 'tier ${i + 1}: "$m": a route cannot match a process';
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// With a route or a target set the core must report
+  /// [GlitchVpnCore.routeTargetsSupported]; an older core refuses the fields.
   Map<String, String> toOpts() {
+    final error = validationError();
+    if (error != null) throw ArgumentError(error);
     final opts = <String, String>{};
-    List<String> clean(List<String> v) =>
-        v.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     final cleaned = tiers
         .map(
           (t) => (
-            block: clean(t.block),
-            direct: clean(t.direct),
-            proxy: clean(t.proxy),
+            block: _clean(t.block),
+            direct: _clean(t.direct),
+            routes: [
+              for (final r in t.routes) (to: r.to, match: _clean(r.match)),
+            ],
+            proxy: _clean(t.proxy),
           ),
         )
         .where(
           (t) =>
-              t.block.isNotEmpty || t.direct.isNotEmpty || t.proxy.isNotEmpty,
+              t.block.isNotEmpty ||
+              t.direct.isNotEmpty ||
+              t.routes.isNotEmpty ||
+              t.proxy.isNotEmpty,
         )
         .toList();
 
@@ -229,9 +406,17 @@ class VpnRouting {
           {
             if (t.block.isNotEmpty) 'block': t.block,
             if (t.direct.isNotEmpty) 'direct': t.direct,
+            if (t.routes.isNotEmpty)
+              'routes': [
+                for (final r in t.routes) {'to': r.to, 'match': r.match},
+              ],
             if (t.proxy.isNotEmpty) 'proxy': t.proxy,
           },
       ]);
+    }
+    final t = targets;
+    if (t != null && !t.isEmpty) {
+      opts['routingTargets'] = jsonEncode(t.toJson());
     }
     if (localNetworksDirect) opts['localNetworksDirect'] = '1';
     if (disableIPv6) opts['disableIPv6'] = '1';
@@ -1009,6 +1194,17 @@ class GlitchVpnCore {
         );
       }
 
+      final routingError = routing?.validationError();
+      if (routingError != null) {
+        throw _refuse('INVALID_ROUTING', routingError);
+      }
+      if ((routing?.usesTargets ?? false) && !await routeTargetsSupported()) {
+        throw _refuse(
+          'ROUTE_TARGETS_NOT_IN_BUILD',
+          'This core build does not carry named route targets',
+        );
+      }
+
       final effectiveDomainStrategy = domainStrategy.trim();
       if (effectiveDomainStrategy.isNotEmpty &&
           !domainStrategiesFor(engine).contains(effectiveDomainStrategy)) {
@@ -1606,6 +1802,7 @@ class GlitchVpnCore {
   }
 
   static Set<String>? _engineIdsCache;
+  static Set<String>? _featuresCache;
 
   /// Reads the capabilities JSON instead of [getCapabilitiesJson] when set,
   /// so the cache rule below is testable without the native library.
@@ -1613,7 +1810,10 @@ class GlitchVpnCore {
   static Future<String> Function()? debugCapabilitiesJsonProvider;
 
   @visibleForTesting
-  static void debugResetEngineIdsCache() => _engineIdsCache = null;
+  static void debugResetEngineIdsCache() {
+    _engineIdsCache = null;
+    _featuresCache = null;
+  }
 
   /// `{"engines": [...]}` → the string ids; anything malformed → empty set,
   /// never a throw (the payload crosses the FFI boundary).
@@ -1648,6 +1848,43 @@ class GlitchVpnCore {
     if (ids.isNotEmpty) _engineIdsCache = ids;
     return ids;
   }
+
+  /// `{"features": [...]}` → the string ids; malformed → empty set.
+  static Set<String> _parseFeatures(String json) {
+    final ids = <String>{};
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is Map && decoded['features'] is List) {
+        for (final e in decoded['features'] as List) {
+          if (e is String) ids.add(e);
+        }
+      }
+    } catch (_) {}
+    return ids;
+  }
+
+  /// Feature ids this core reports. Empty (a failed or garbled read, or a core
+  /// that reports none) is returned but never cached.
+  static Future<Set<String>> coreFeatures() async {
+    final cached = _featuresCache;
+    if (cached != null) return cached;
+    var ids = const <String>{};
+    try {
+      final json =
+          await (debugCapabilitiesJsonProvider?.call() ??
+              getCapabilitiesJson());
+      ids = _parseFeatures(json);
+    } catch (_) {
+      // empty; reads as "not supported"
+    }
+    if (ids.isNotEmpty) _featuresCache = ids;
+    return ids;
+  }
+
+  /// Whether the core takes [VpnRoutingTier.routes] and [VpnRouting.targets].
+  /// False for an older core, which refuses them.
+  static Future<bool> routeTargetsSupported() async =>
+      (await coreFeatures()).contains('routeTargets');
 
   static Future<List<VpnEngine>> availableEngines() async {
     final ids = await engineIds();

@@ -111,6 +111,43 @@ than let past it. A country that should bypass the tunnel is a
 `geoip:<cc>` entry in a tier's `direct` list; there is no separate country
 option.
 
+### Named servers, groups and chains
+
+A tier's `routes` send what they match to a named target instead of the
+session's server. Targets live in `VpnRouting.targets`; an id is 1 to 16
+characters of `a-z0-9`, unique across servers, groups and chains.
+
+```dart
+routing: const VpnRouting(
+  targets: VpnRouteTargets(
+    servers: [
+      VpnRouteServer(id: 'de', link: 'vless://…'),
+      VpnRouteServer(id: 'nl', link: 'vless://…'),
+    ],
+    groups: [VpnRouteGroup(id: 'eu', servers: ['de', 'nl'])],  // balanced
+    chains: [VpnRouteChain(id: 'hop', hops: ['de', 'nl'])],    // de, then nl exits
+  ),
+  tiers: [
+    VpnRoutingTier(
+      routes: [
+        VpnRoute(to: 'hop', match: ['domain:example.com']),
+        VpnRoute(to: 'eu', match: ['geosite:netflix']),
+      ],
+    ),
+  ],
+),
+```
+
+Within a tier: block, then direct, then routes in list order, then proxy. A
+route takes no `process:` matcher. A group balances with the session's
+`balancerStrategy`; a chain is 2 to 4 servers, the first dialled directly and
+each later one through the one before it, the last exiting.
+
+Check `GlitchVpnCore.routeTargetsSupported()` first: an older core refuses the
+fields. `connect()` validates the set as the core does and refuses with
+`INVALID_ROUTING` (the message names the id or rule) or
+`ROUTE_TARGETS_NOT_IN_BUILD`.
+
 Geo matchers need geoip.dat/geosite.dat — you supply them, see below.
 
 ## Platform setup

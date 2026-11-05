@@ -36,7 +36,8 @@ await GlitchVpnCore.instance.connect(
 );
 ```
 
-Ordered routing tiers, fake-ip DNS, split tunneling, balancer pools, a loopback
+Ordered routing tiers that can send a site to a named server, a balanced group or a
+chain of hops, fake-ip DNS, split tunneling, balancer pools, a loopback
 proxy mode that needs no admin rights, and session restore when the app
 relaunches over a live tunnel — all through the same call.
 

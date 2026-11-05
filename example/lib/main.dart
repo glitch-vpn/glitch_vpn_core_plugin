@@ -143,6 +143,13 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _directRulesCtrl = TextEditingController();
   final _proxyRulesCtrl = TextEditingController();
   final _blockRulesCtrl = TextEditingController();
+  // Named targets: one `id link` / `id member member` / `id hop hop` line per
+  // entry, and one `id matcher matcher` line per tier-1 route.
+  final _targetServersCtrl = TextEditingController();
+  final _targetGroupsCtrl = TextEditingController();
+  final _targetChainsCtrl = TextEditingController();
+  final _routesCtrl = TextEditingController();
+  bool _routeTargetsSupported = false;
   // Extra routing tiers below tier 1 (the three fields above).
   final List<
     ({
@@ -292,8 +299,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
       final engines = await GlitchVpnCore.availableEngines();
       final versions = await GlitchVpnCore.getCoreVersions();
       final alwaysOn = await GlitchVpnCore.alwaysOn();
+      final routeTargets = await GlitchVpnCore.routeTargetsSupported();
       if (!mounted) return;
       setState(() {
+        _routeTargetsSupported = routeTargets;
         _alwaysOn = alwaysOn;
         _capabilities = caps;
         _versions = versions;
@@ -316,6 +325,31 @@ class _CoreTestPageState extends State<CoreTestPage> {
   // Rule fields take one matcher per line: a regexp may hold a comma.
   List<String> _lines(String s) =>
       s.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
+  // `id rest rest` per line → (id, [rest…]); a line with no rest is skipped.
+  List<(String, List<String>)> _idLines(String s) => [
+    for (final line in _lines(s))
+      if (line.split(RegExp(r'\s+')).length > 1)
+        (
+          line.split(RegExp(r'\s+')).first,
+          line.split(RegExp(r'\s+')).skip(1).toList(),
+        ),
+  ];
+
+  VpnRouteTargets _routeTargets() => VpnRouteTargets(
+    servers: [
+      for (final (id, rest) in _idLines(_targetServersCtrl.text))
+        VpnRouteServer(id: id, link: rest.join(' ')),
+    ],
+    groups: [
+      for (final (id, rest) in _idLines(_targetGroupsCtrl.text))
+        VpnRouteGroup(id: id, servers: rest),
+    ],
+    chains: [
+      for (final (id, rest) in _idLines(_targetChainsCtrl.text))
+        VpnRouteChain(id: id, hops: rest),
+    ],
+  );
 
   // One `name=ip1,ip2` entry per line; `=` because keys carry `:` prefixes.
   Map<String, List<String>> _hosts(String s) {
@@ -343,10 +377,15 @@ class _CoreTestPageState extends State<CoreTestPage> {
     try {
       final routing = VpnRouting(
         mode: _routingMode,
+        targets: _routeTargets(),
         tiers: [
           VpnRoutingTier(
             block: _lines(_blockRulesCtrl.text),
             direct: _lines(_directRulesCtrl.text),
+            routes: [
+              for (final (id, match) in _idLines(_routesCtrl.text))
+                VpnRoute(to: id, match: match),
+            ],
             proxy: _lines(_proxyRulesCtrl.text),
           ),
           for (final t in _extraTiers)
@@ -459,6 +498,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
     _directRulesCtrl.dispose();
     _proxyRulesCtrl.dispose();
     _blockRulesCtrl.dispose();
+    _targetServersCtrl.dispose();
+    _targetGroupsCtrl.dispose();
+    _targetChainsCtrl.dispose();
+    _routesCtrl.dispose();
     for (final t in _extraTiers) {
       t.block.dispose();
       t.direct.dispose();
@@ -1009,6 +1052,25 @@ class _CoreTestPageState extends State<CoreTestPage> {
             _blockRulesCtrl,
             r'regexp:^ad[0-9]{2,5}\.example$'
                 '\ngeosite:category-ads-all',
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Named targets (core: '
+              '${_routeTargetsSupported ? 'supported' : 'not supported'}). '
+              'Ids are a-z0-9, up to 16, unique. Server: id link · '
+              'group: id server-id … · chain: id hop-id hop-id (2-4) · '
+              'route (tier 1): id matcher matcher …',
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+          ),
+          _ruleField('named servers', _targetServersCtrl, 's1 ss://…#one'),
+          _ruleField('named groups', _targetGroupsCtrl, 'g1 s1 s2'),
+          _ruleField('named chains', _targetChainsCtrl, 'c1 s1 s2'),
+          _ruleField(
+            'routes (tier 1)',
+            _routesCtrl,
+            'c1 domain:example.com\ns1 geosite:netflix',
           ),
           for (var i = 0; i < _extraTiers.length; i++)
             Card(
