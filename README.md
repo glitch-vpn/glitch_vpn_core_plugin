@@ -60,7 +60,9 @@ when the app is built with an address for it:
 flutter run --dart-define=GLITCH_PPROF_ADDR=127.0.0.1:6060
 ```
 
-Without the define, no build opens the port.
+Without the define, no build opens the port. On Windows with the installed
+service, the profiler runs in the app's process, not in the service that runs
+the engines.
 
 ## Contributing
 
