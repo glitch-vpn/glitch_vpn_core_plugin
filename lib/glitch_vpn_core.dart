@@ -1802,8 +1802,7 @@ class GlitchVpnCore {
     return GlitchVpnCoreFfi.instance.coreCapabilitiesJson();
   }
 
-  static Set<String>? _engineIdsCache;
-  static Set<String>? _featuresCache;
+  static ({Set<String> engines, Set<String> features})? _capabilitiesCache;
 
   /// Reads the capabilities JSON instead of [getCapabilitiesJson] when set,
   /// so the cache rule below is testable without the native library.
@@ -1811,81 +1810,60 @@ class GlitchVpnCore {
   static Future<String> Function()? debugCapabilitiesJsonProvider;
 
   @visibleForTesting
-  static void debugResetEngineIdsCache() {
-    _engineIdsCache = null;
-    _featuresCache = null;
-  }
+  static void debugResetCapabilitiesCache() => _capabilitiesCache = null;
 
-  /// `{"engines": [...]}` → the string ids; anything malformed → empty set,
-  /// never a throw (the payload crosses the FFI boundary).
-  static Set<String> _parseEngineIds(String json) {
-    final ids = <String>{};
+  /// `{"engines": [...], "features": [...]}` → the string ids of each;
+  /// anything malformed → empty sets, never a throw (the payload crosses the
+  /// FFI boundary).
+  static ({Set<String> engines, Set<String> features}) _parseCapabilities(
+    String json,
+  ) {
+    Set<String> idsOf(Object? list) => {
+      if (list is List)
+        for (final e in list)
+          if (e is String) e,
+    };
     try {
       final decoded = jsonDecode(json);
-      if (decoded is Map && decoded['engines'] is List) {
-        for (final e in decoded['engines'] as List) {
-          if (e is String) ids.add(e);
-        }
+      if (decoded is Map) {
+        return (
+          engines: idsOf(decoded['engines']),
+          features: idsOf(decoded['features']),
+        );
       }
     } catch (_) {}
-    return ids;
+    return (engines: const <String>{}, features: const <String>{});
   }
 
-  /// Engine ids linked in this binary. An empty result (garbled or failed
-  /// read) is returned but never cached, so a later call retries instead of
-  /// reporting "no engines" for the process lifetime.
-  static Future<Set<String>> engineIds() async {
-    final cached = _engineIdsCache;
+  /// An empty engine list (garbled or failed read) is returned but never
+  /// cached, so a later call retries instead of reporting "no engines" for
+  /// the process lifetime.
+  static Future<({Set<String> engines, Set<String> features})>
+  _capabilities() async {
+    final cached = _capabilitiesCache;
     if (cached != null) return cached;
-    var ids = const <String>{};
+    var read = (engines: const <String>{}, features: const <String>{});
     try {
       final json =
           await (debugCapabilitiesJsonProvider?.call() ??
               getCapabilitiesJson());
-      ids = _parseEngineIds(json);
+      read = _parseCapabilities(json);
     } catch (_) {
-      // empty; treated as "unknown", callers fall back permissively
+      // empty; engines read as "unknown", features as "not supported"
     }
-    if (ids.isNotEmpty) _engineIdsCache = ids;
-    return ids;
+    if (read.engines.isNotEmpty) _capabilitiesCache = read;
+    return read;
   }
 
-  /// `{"features": [...]}` → the string ids; malformed → empty set.
-  static Set<String> _parseFeatures(String json) {
-    final ids = <String>{};
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is Map && decoded['features'] is List) {
-        for (final e in decoded['features'] as List) {
-          if (e is String) ids.add(e);
-        }
-      }
-    } catch (_) {}
-    return ids;
-  }
-
-  /// Feature ids this core reports. Empty (a failed or garbled read, or a core
-  /// that reports none) is returned but never cached.
-  static Future<Set<String>> coreFeatures() async {
-    final cached = _featuresCache;
-    if (cached != null) return cached;
-    var ids = const <String>{};
-    try {
-      final json =
-          await (debugCapabilitiesJsonProvider?.call() ??
-              getCapabilitiesJson());
-      ids = _parseFeatures(json);
-    } catch (_) {
-      // empty; reads as "not supported"
-    }
-    if (ids.isNotEmpty) _featuresCache = ids;
-    return ids;
-  }
+  /// Engine ids linked in this binary; empty when unknown, and callers fall
+  /// back permissively.
+  static Future<Set<String>> engineIds() async =>
+      (await _capabilities()).engines;
 
   /// Whether the core takes [VpnRoutingTier.routes] and [VpnRouting.targets].
   /// False for an older core, which refuses them.
   static Future<bool> routeTargetsSupported() async =>
-      (await coreFeatures()).contains('routeTargets');
+      (await _capabilities()).features.contains('routeTargets');
 
   static Future<List<VpnEngine>> availableEngines() async {
     final ids = await engineIds();

@@ -21,14 +21,14 @@ const _texts = VpnNotificationTexts(
 
 void main() {
   setUp(() {
-    GlitchVpnCore.debugResetEngineIdsCache();
+    GlitchVpnCore.debugResetCapabilitiesCache();
     GlitchVpnCore.debugCapabilitiesJsonProvider = () async =>
         '{"engines":["xray","mihomo"]}';
   });
 
   tearDown(() {
     GlitchVpnCore.debugCapabilitiesJsonProvider = null;
-    GlitchVpnCore.debugResetEngineIdsCache();
+    GlitchVpnCore.debugResetCapabilitiesCache();
     VpnStatusChannel.instance.emit(VpnStatus.disconnected);
   });
 

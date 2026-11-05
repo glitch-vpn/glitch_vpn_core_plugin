@@ -50,7 +50,7 @@ VpnRouting _routingWith({
 void main() {
   tearDown(() {
     GlitchVpnCore.debugCapabilitiesJsonProvider = null;
-    GlitchVpnCore.debugResetEngineIdsCache();
+    GlitchVpnCore.debugResetCapabilitiesCache();
     VpnStatusChannel.instance.emit(VpnStatus.disconnected);
   });
 
@@ -326,7 +326,7 @@ void main() {
 
   group('routeTargetsSupported', () {
     Future<bool> supportedFor(String capabilities) {
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
       GlitchVpnCore.debugCapabilitiesJsonProvider = () async => capabilities;
       return GlitchVpnCore.routeTargetsSupported();
     }
@@ -348,7 +348,7 @@ void main() {
       expect(await supportedFor('{"engines":["xray"]}'), isFalse);
       expect(await supportedFor('{"features":"routeTargets"}'), isFalse);
       expect(await supportedFor('not json'), isFalse);
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
       GlitchVpnCore.debugCapabilitiesJsonProvider = () async =>
           throw StateError('no library');
       expect(await GlitchVpnCore.routeTargetsSupported(), isFalse);
@@ -357,7 +357,7 @@ void main() {
 
   group('connect refuses a bad routing', () {
     Future<PlatformException> refusalOf(VpnRouting routing) async {
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
       try {
         await GlitchVpnCore.instance.connect(
           engine: VpnEngine.xray,

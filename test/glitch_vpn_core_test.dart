@@ -182,10 +182,10 @@ void main() {
   test('engineIds parses payloads and tolerates garbage', () async {
     addTearDown(() {
       GlitchVpnCore.debugCapabilitiesJsonProvider = null;
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
     });
     Future<Set<String>> read(String json) async {
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
       GlitchVpnCore.debugCapabilitiesJsonProvider = () async => json;
       return GlitchVpnCore.engineIds();
     }
@@ -201,9 +201,9 @@ void main() {
     var calls = 0;
     addTearDown(() {
       GlitchVpnCore.debugCapabilitiesJsonProvider = null;
-      GlitchVpnCore.debugResetEngineIdsCache();
+      GlitchVpnCore.debugResetCapabilitiesCache();
     });
-    GlitchVpnCore.debugResetEngineIdsCache();
+    GlitchVpnCore.debugResetCapabilitiesCache();
 
     GlitchVpnCore.debugCapabilitiesJsonProvider = () async {
       calls++;
