@@ -287,6 +287,17 @@ void main() {
       }
     });
 
+    test('a bare process: prefix is not a process matcher', () {
+      expect(
+        _routingWith(
+          routes: const [
+            VpnRoute(to: 's1', match: ['process:']),
+          ],
+        ).validationError(),
+        isNull,
+      );
+    });
+
     test('a route that matches nothing is refused', () {
       expect(
         _routingWith(

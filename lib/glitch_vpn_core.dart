@@ -364,7 +364,8 @@ class VpnRouting {
           return 'tier ${i + 1}: route to "${r.to}" matches nothing';
         }
         for (final m in match) {
-          if (m.toLowerCase().startsWith('process:')) {
+          if (m.length > 'process:'.length &&
+              m.toLowerCase().startsWith('process:')) {
             return 'tier ${i + 1}: "$m": a route cannot match a process';
           }
         }
