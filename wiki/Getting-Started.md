@@ -228,6 +228,23 @@ usable files the connect fails loudly — nothing is downloaded behind your back
 `pickDirectory()` opens a folder picker on Windows if you want the user to
 choose.
 
+## A download through one server
+
+`openLinkRelay(link)` opens a SOCKS5 listener on `127.0.0.1` whose connections
+leave through that one link, with a login of its own: `relay.address` is
+`socks5://user:password@127.0.0.1:port`, so keep it out of logs (`toString`
+leaves the login out). It starts no session, asks for no VPN permission and
+changes no status, so it works with a tunnel up, in proxy mode or with neither.
+`linkRelaySupported()` says whether the core has the call; without it
+`openLinkRelay` throws `LINK_RELAY_NOT_IN_BUILD`.
+
+The relay closes itself after `idleSec` (60 by default) with no connection
+open, counted from the open, and on `relay.close()`; a later connection to its
+port is refused, with no event. A server addressed by a name is resolved at each
+dial. On xray an unreachable server shows as a closed connection after the SOCKS
+reply, and `timeoutMs` bounds a dial on mihomo only. Any other failure throws
+`LINK_RELAY_FAILED` with the core's reason.
+
 ## What else is there
 
 `measurePings(links)` for url-test latency without connecting (a link that

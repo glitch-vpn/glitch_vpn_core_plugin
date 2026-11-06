@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -150,6 +151,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _targetChainsCtrl = TextEditingController();
   final _routesCtrl = TextEditingController();
   bool _routeTargetsSupported = false;
+  bool _linkRelaySupported = false;
   // Extra routing tiers below tier 1 (the three fields above).
   final List<
     ({
@@ -170,6 +172,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _proxyUserCtrl = TextEditingController();
   final _proxyPassCtrl = TextEditingController();
   final _probeUrlCtrl = TextEditingController();
+  final _relayUrlCtrl = TextEditingController(text: 'http://api.ipify.org/');
   final _livenessCtrl = TextEditingController();
   final _ipEchoV4Ctrl = TextEditingController();
   final _ipEchoV6Ctrl = TextEditingController();
@@ -223,6 +226,10 @@ class _CoreTestPageState extends State<CoreTestPage> {
   bool _pinging = false;
   List<PingResult>? _pingResults;
   String? _pingError;
+
+  LinkRelay? _relay;
+  bool _relayBusy = false;
+  String? _relayResult;
 
   @override
   void initState() {
@@ -300,9 +307,11 @@ class _CoreTestPageState extends State<CoreTestPage> {
       final versions = await GlitchVpnCore.getCoreVersions();
       final alwaysOn = await GlitchVpnCore.alwaysOn();
       final routeTargets = await GlitchVpnCore.routeTargetsSupported();
+      final linkRelay = await GlitchVpnCore.linkRelaySupported();
       if (!mounted) return;
       setState(() {
         _routeTargetsSupported = routeTargets;
+        _linkRelaySupported = linkRelay;
         _alwaysOn = alwaysOn;
         _capabilities = caps;
         _versions = versions;
@@ -489,8 +498,128 @@ class _CoreTestPageState extends State<CoreTestPage> {
     });
   }
 
+  Future<void> _openRelay() async {
+    final links = _linksFromConfig();
+    if (links.isEmpty) return;
+    setState(() {
+      _relayBusy = true;
+      _relayResult = null;
+    });
+    LinkRelay? relay;
+    String? result;
+    try {
+      relay = await GlitchVpnCore.openLinkRelay(links.first, idleSec: 120);
+    } on PlatformException catch (e) {
+      result = '${e.code}: ${e.message ?? ''}';
+    }
+    if (!mounted) {
+      await relay?.close();
+      return;
+    }
+    setState(() {
+      _relayBusy = false;
+      _relay = relay;
+      _relayResult = result;
+    });
+  }
+
+  Future<void> _fetchThroughRelay() async {
+    final relay = _relay;
+    final url = Uri.tryParse(_relayUrlCtrl.text.trim());
+    if (relay == null || url == null || url.host.isEmpty) return;
+    setState(() {
+      _relayBusy = true;
+      _relayResult = null;
+    });
+    String result;
+    try {
+      result = await _socksGet(relay, url);
+    } catch (e) {
+      result = 'error: $e';
+    }
+    if (!mounted) return;
+    setState(() {
+      _relayBusy = false;
+      _relayResult = result;
+    });
+  }
+
+  Future<void> _closeRelay() async {
+    final relay = _relay;
+    if (relay == null) return;
+    setState(() => _relayBusy = true);
+    await relay.close();
+    if (!mounted) return;
+    setState(() {
+      _relayBusy = false;
+      _relay = null;
+      _relayResult = 'closed';
+    });
+  }
+
+  /// A plain-HTTP GET through the relay, with the SOCKS5 greeting, login and
+  /// CONNECT sent ahead of the answers: the replies come back in order.
+  Future<String> _socksGet(LinkRelay relay, Uri url) async {
+    if (url.scheme != 'http') return 'http URLs only';
+    final socket = await Socket.connect(
+      LinkRelay.host,
+      relay.port,
+      timeout: const Duration(seconds: 5),
+    );
+    try {
+      final userBytes = utf8.encode(relay.user);
+      final passwordBytes = utf8.encode(relay.password);
+      final hostBytes = utf8.encode(url.host);
+      final port = url.hasPort ? url.port : 80;
+      socket.add([5, 1, 2]);
+      socket.add([
+        1,
+        userBytes.length,
+        ...userBytes,
+        passwordBytes.length,
+        ...passwordBytes,
+      ]);
+      socket.add([
+        5,
+        1,
+        0,
+        3,
+        hostBytes.length,
+        ...hostBytes,
+        port >> 8,
+        port & 0xff,
+      ]);
+      final target = url.hasQuery ? '${url.path}?${url.query}' : url.path;
+      socket.write(
+        'GET ${target.isEmpty ? '/' : target} HTTP/1.0\r\n'
+        'Host: ${url.host}\r\n\r\n',
+      );
+
+      final received = BytesBuilder(copy: false);
+      await socket.forEach(received.add).timeout(const Duration(seconds: 20));
+      final reply = received.takeBytes();
+      if (reply.length < 14 ||
+          reply[0] != 5 ||
+          reply[1] != 2 ||
+          reply[3] != 0) {
+        return 'the relay refused the login (${reply.length} bytes)';
+      }
+      if (reply[5] != 0) {
+        return 'the relay could not connect (code ${reply[5]})';
+      }
+      final httpResponse = utf8.decode(reply.sublist(14), allowMalformed: true);
+      return httpResponse.length > 600
+          ? '${httpResponse.substring(0, 600)}...'
+          : httpResponse;
+    } finally {
+      socket.destroy();
+    }
+  }
+
   @override
   void dispose() {
+    unawaited(_relay?.close());
+    _relayUrlCtrl.dispose();
     _logSub?.cancel();
     _connSub?.cancel();
     _serverSub?.cancel();
@@ -555,6 +684,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
               _dnsCard(),
               const SizedBox(height: 12),
               _pingCard(),
+              const SizedBox(height: 12),
+              _relayCard(),
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: (s == VpnStatus.disconnecting)
@@ -1410,6 +1541,89 @@ class _CoreTestPageState extends State<CoreTestPage> {
             _dnsDirectServersCtrl,
             '77.88.8.8',
           ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _relayCard() => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Link relay',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              if (_relayBusy)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              TextButton.icon(
+                onPressed:
+                    (_relayBusy || _relay != null || !_linkRelaySupported)
+                    ? null
+                    : _openRelay,
+                icon: const Icon(Icons.call_split),
+                label: const Text('Open'),
+              ),
+              TextButton.icon(
+                onPressed: (_relayBusy || _relay == null) ? null : _closeRelay,
+                icon: const Icon(Icons.close),
+                label: const Text('Close'),
+              ),
+            ],
+          ),
+          Text(
+            'A loopback SOCKS5 listener through the first link above. '
+            'No session, VPN permission or status change; it works with the '
+            'tunnel up, in proxy mode or with neither. '
+            '(${_linkRelaySupported ? 'supported' : 'not supported'} by this '
+            'core)',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+          if (_relay != null) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: SelectableText(
+                '${_relay!.engine}  ${LinkRelay.host}:${_relay!.port}  '
+                '${_relay!.user} / ${_relay!.password}',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _relayUrlCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'GET through the relay',
+                      hintText: 'http://host/path',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _relayBusy ? null : _fetchThroughRelay,
+                  child: const Text('Fetch'),
+                ),
+              ],
+            ),
+          ],
+          if (_relayResult != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: SelectableText(
+                _relayResult!,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
         ],
       ),
     ),

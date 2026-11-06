@@ -231,6 +231,39 @@ class GlitchVpnCoreFfi {
   static Future<String> measurePings(String requestJson) =>
       Isolate.run(() => _callJsonExportSync('MeasurePings', requestJson, '[]'));
 
+  // Blocks while the link's engine instance starts - keep off the UI isolate.
+  static Future<String> openLinkRelay(String requestJson) => Isolate.run(
+    () => _callJsonExportSync('OpenLinkRelay', requestJson, '{}'),
+  );
+
+  // Returns once the relay's connections have ended - keep off the UI isolate.
+  static Future<void> closeLinkRelay(String id) =>
+      Isolate.run(() => _closeLinkRelaySync(id));
+
+  @pragma('vm:entry-point')
+  static void _closeLinkRelaySync(String id) {
+    final idPtr = id.toNativeUtf8();
+    try {
+      GlitchCoreBindings(_openLib()).CloseLinkRelay(idPtr.cast());
+    } finally {
+      pkg.malloc.free(idPtr);
+    }
+  }
+
+  /// The capabilities JSON without the session path of [coreCapabilitiesJson]:
+  /// no instance is built and no status port is registered, so it is safe from
+  /// an isolate that is not the one holding the connection.
+  static String readCapabilitiesJson() {
+    final bindings = GlitchCoreBindings(_openLib());
+    final ptr = bindings.CoreCapabilities();
+    if (ptr == ffi.nullptr) return '{"engines":[]}';
+    try {
+      return ptr.cast<pkg.Utf8>().toDartString();
+    } finally {
+      bindings.FreeStatusMessage(ptr);
+    }
+  }
+
   // [symbol] is one of the core's string-in, string-out exports; [emptyAnswer]
   // stands for a null return.
   @pragma('vm:entry-point')
@@ -240,7 +273,7 @@ class GlitchVpnCoreFfi {
     String emptyAnswer,
   ) {
     final lib = _openLib();
-    final measure = lib
+    final callExport = lib
         .lookupFunction<
           ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>),
           ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
@@ -253,7 +286,7 @@ class GlitchVpnCoreFfi {
     final reqPtr = requestJson.toNativeUtf8();
     ffi.Pointer<ffi.Char> resPtr = ffi.nullptr;
     try {
-      resPtr = measure(reqPtr.cast());
+      resPtr = callExport(reqPtr.cast());
       if (resPtr == ffi.nullptr) return emptyAnswer;
       return resPtr.cast<pkg.Utf8>().toDartString();
     } finally {

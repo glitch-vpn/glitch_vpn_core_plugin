@@ -1866,6 +1866,20 @@ class GlitchVpnCore {
   static Future<bool> routeTargetsSupported() async =>
       (await _capabilities()).features.contains('routeTargets');
 
+  /// Whether the core opens [openLinkRelay]; false for a core without the
+  /// export. Read without the session path [getCapabilitiesJson] takes, so it
+  /// is safe in an isolate other than the one holding the connection.
+  static Future<bool> linkRelaySupported() async {
+    try {
+      final json =
+          await (debugCapabilitiesJsonProvider?.call() ??
+              Future.sync(GlitchVpnCoreFfi.readCapabilitiesJson));
+      return _parseCapabilities(json).features.contains('linkRelay');
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<List<VpnEngine>> availableEngines() async {
     final ids = await engineIds();
     return VpnEngine.values.where((e) => ids.contains(e.name)).toList();
@@ -1913,13 +1927,98 @@ class GlitchVpnCore {
           .map(PingResult.fromJson)
           .toList(growable: false);
     }
-    final coreError = decoded is Map ? decoded['error']?.toString() : null;
-    throw PlatformException(
+    throw _coreRefusal(
+      decoded,
       code: 'PING_FAILED',
+      unreadable: 'unreadable ping results',
+    );
+  }
+
+  /// The core answered `{"error": ...}`, or something unreadable in its place.
+  static PlatformException _coreRefusal(
+    Object? decoded, {
+    required String code,
+    required String unreadable,
+  }) {
+    final coreError = decoded is Map ? decoded['error']?.toString() : null;
+    return PlatformException(
+      code: code,
       message: (coreError == null || coreError.isEmpty)
-          ? 'unreadable ping results'
+          ? unreadable
           : coreError,
     );
+  }
+
+  /// Answers the relay request instead of the native library when set, so the
+  /// answer parsing is testable without it.
+  @visibleForTesting
+  static Future<String> Function(String requestJson)?
+  debugOpenLinkRelayJsonProvider;
+
+  @visibleForTesting
+  static Future<void> Function(String id)? debugCloseLinkRelayProvider;
+
+  /// Opens a loopback SOCKS5 listener whose connections leave through [link].
+  /// It is no session: no VPN permission, TUN, notification or status change,
+  /// and it runs beside a connection, a proxy-mode session or none. Its login
+  /// is its own, never [proxyCredentials], and not for logs.
+  ///
+  /// The relay closes itself after [idleSec] (default 60) without a connection,
+  /// counted from the open, and on [closeLinkRelay]; a connection to its port
+  /// is refused from then on, with no event. [timeoutMs] bounds a dial on
+  /// mihomo only: xray connects on the first byte, so there an unreachable
+  /// server shows as a closed connection after the SOCKS reply. With [engine],
+  /// the link is carried on that engine alone.
+  ///
+  /// Throws [PlatformException] `LINK_RELAY_NOT_IN_BUILD` for a core without
+  /// relays, and `LINK_RELAY_FAILED` with the core's reason (a link no engine
+  /// carries, too many relays open) otherwise.
+  static Future<LinkRelay> openLinkRelay(
+    String link, {
+    VpnEngine? engine,
+    int? timeoutMs,
+    int? idleSec,
+  }) async {
+    if (!await linkRelaySupported()) {
+      throw PlatformException(
+        code: 'LINK_RELAY_NOT_IN_BUILD',
+        message: 'This core build does not open link relays',
+      );
+    }
+    final request = jsonEncode({
+      'link': link,
+      if (engine != null) 'engine': engine.name,
+      'timeoutMs': ?timeoutMs,
+      'idleSec': ?idleSec,
+    });
+    final raw =
+        await (debugOpenLinkRelayJsonProvider?.call(request) ??
+            GlitchVpnCoreFfi.openLinkRelay(request));
+    final relay = LinkRelay.tryParse(raw);
+    if (relay != null) return relay;
+
+    Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {}
+    // A relay the core opened but whose answer cannot be used is closed here,
+    // or it keeps one of the core's slots until it idles out.
+    final openedId = decoded is Map ? decoded['id']?.toString() ?? '' : '';
+    if (openedId.isNotEmpty) await closeLinkRelay(openedId);
+    throw _coreRefusal(
+      decoded,
+      code: 'LINK_RELAY_FAILED',
+      unreadable: 'unreadable relay answer',
+    );
+  }
+
+  /// Ends the relay and its connections, and returns once its link is
+  /// released. An id the core no longer holds, such as a relay that closed
+  /// itself, is ignored.
+  static Future<void> closeLinkRelay(String id) async {
+    if (id.isEmpty || !await linkRelaySupported()) return;
+    await (debugCloseLinkRelayProvider?.call(id) ??
+        GlitchVpnCoreFfi.closeLinkRelay(id));
   }
 
   /// Reads the versions JSON instead of the native library when set, so the
@@ -2154,6 +2253,60 @@ class PingResult {
         ? json['error'].toString()
         : null,
   );
+}
+
+/// A relay [GlitchVpnCore.openLinkRelay] opened. The login is the relay's own
+/// and short-lived, and [toString] leaves it out.
+class LinkRelay {
+  /// The relay's own host: it listens on loopback only.
+  static const host = '127.0.0.1';
+
+  final String id;
+  final int port;
+  final String user;
+  final String password;
+  final String engine; // "xray" | "mihomo"; "" = not named
+
+  const LinkRelay({
+    required this.id,
+    required this.port,
+    required this.user,
+    required this.password,
+    required this.engine,
+  });
+
+  /// Null for an answer that cannot be used: no id, no port or no login.
+  static LinkRelay? tryParse(String json) {
+    try {
+      final m = jsonDecode(json);
+      if (m is! Map) return null;
+      String s(String k) => (m[k] ?? '').toString();
+      final relay = LinkRelay(
+        id: s('id'),
+        port: (m['port'] as num?)?.toInt() ?? 0,
+        user: s('user'),
+        password: s('pass'),
+        engine: s('engine'),
+      );
+      if (relay.id.isEmpty ||
+          relay.port <= 0 ||
+          relay.user.isEmpty ||
+          relay.password.isEmpty) {
+        return null;
+      }
+      return relay;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `socks5://user:password@127.0.0.1:port`, with the login in it.
+  String get address => 'socks5://$user:$password@$host:$port';
+
+  Future<void> close() => GlitchVpnCore.closeLinkRelay(id);
+
+  @override
+  String toString() => 'LinkRelay($engine, $host:$port)';
 }
 
 /// Engine versions of the loaded core. A field is null for an engine not in

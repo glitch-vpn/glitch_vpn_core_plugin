@@ -78,6 +78,11 @@ static VpnConnEvent? tryParse(String json) {
   — a shared vocabulary with the core; new partial-result models reuse these
   literals, never invent parallel ones.
 
+A model that is a handle to something the core holds (`LinkRelay`) keeps its
+secret out of `toString`, exposes it through a named getter, and closes through
+the facade (`close()` calls `GlitchVpnCore.closeLinkRelay`); the facade call is
+the one that guards the core's capability.
+
 A value the plugin sends to the platform rather than parses (the
 notification's `VpnByteUnits` inside `VpnNotificationTexts`) is a const class
 with named, required fields, flattened into the same string map by `toMap`;
