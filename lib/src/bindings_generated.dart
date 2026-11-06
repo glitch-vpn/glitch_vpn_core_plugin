@@ -78,6 +78,32 @@ class GlitchCoreBindings {
         ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
       >();
 
+  ffi.Pointer<ffi.Char> OpenLinkRelay(ffi.Pointer<ffi.Char> cRequestJSON) {
+    return _OpenLinkRelay(cRequestJSON);
+  }
+
+  late final _OpenLinkRelayPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
+        >
+      >('OpenLinkRelay');
+  late final _OpenLinkRelay =
+      _OpenLinkRelayPtr.asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)
+      >();
+
+  void CloseLinkRelay(ffi.Pointer<ffi.Char> cID) {
+    return _CloseLinkRelay(cID);
+  }
+
+  late final _CloseLinkRelayPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
+        'CloseLinkRelay',
+      );
+  late final _CloseLinkRelay =
+      _CloseLinkRelayPtr.asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+
   int EngineStart(
     ffi.Pointer<ffi.Char> cEngineID,
     ffi.Pointer<ffi.Char> cRequestJSON,
