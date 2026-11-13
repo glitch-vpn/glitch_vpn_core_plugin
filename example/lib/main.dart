@@ -734,6 +734,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
           SelectableText(
+            'core ${_versions.core ?? '-'} · '
             'xray ${_versions.xrayCore ?? '-'} · '
             'mihomo ${_versions.mihomo ?? '-'}',
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),

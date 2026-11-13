@@ -253,8 +253,9 @@ fails carries its own `error`; a run the core refuses throws `PING_FAILED`);
 split-tunneling picker; `setConnectionInspector` for a per-connection event
 stream; `setLogsVerbosity` and `setMemoryLimit`; `availableEngines()` to hide
 what a given build does not contain; `getCoreVersions()` for the engines'
-versions, where `xrayCore` and `mihomo` are each null for an engine
-the build lacks.
+versions and the core's own (`core`, its release tag; null for a core older
+than the one that reports it, and on Windows the build of the client DLL).
+`xrayCore` and `mihomo` are each null for an engine the build lacks.
 
 Log lines arrive on `onLogsChanged` once `setLogsVerbosity` turns them on. Each
 `VpnLog` carries `at` (the core's time, in UTC), `level` (a `VpnLogLevel`:
