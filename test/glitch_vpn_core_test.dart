@@ -318,14 +318,16 @@ void main() {
   group('CoreVersions', () {
     test('reads every engine the core reports', () {
       final v = CoreVersions.tryParse(
-        '{"xray_core":"25.3.6","mihomo":"1.19.2"}',
+        '{"core":"v0.2.17","xray_core":"25.3.6","mihomo":"1.19.2"}',
       )!;
+      expect(v.core, 'v0.2.17');
       expect(v.xrayCore, '25.3.6');
       expect(v.mihomo, '1.19.2');
     });
 
     test('an engine absent or reported unknown is null', () {
       final v = CoreVersions.tryParse('{"xray_core":"unknown","mihomo":" "}')!;
+      expect(v.core, isNull);
       expect(v.xrayCore, isNull);
       expect(v.mihomo, isNull);
     });

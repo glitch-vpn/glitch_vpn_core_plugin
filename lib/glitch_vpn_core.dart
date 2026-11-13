@@ -2309,13 +2309,15 @@ class LinkRelay {
   String toString() => 'LinkRelay($engine, $host:$port)';
 }
 
-/// Engine versions of the loaded core. A field is null for an engine not in
-/// this build, or one the build did not stamp with a version.
+/// Versions of the loaded core and its engines. A field is null for an engine
+/// not in this build, or one the build did not stamp with a version; [core] is
+/// also null for a core older than the one that reports its own tag.
 class CoreVersions {
+  final String? core;
   final String? xrayCore;
   final String? mihomo;
 
-  const CoreVersions({this.xrayCore, this.mihomo});
+  const CoreVersions({this.core, this.xrayCore, this.mihomo});
 
   static CoreVersions? tryParse(String json) {
     try {
@@ -2328,6 +2330,7 @@ class CoreVersions {
       }
 
       return CoreVersions(
+        core: version('core'),
         xrayCore: version('xray_core'),
         mihomo: version('mihomo'),
       );
