@@ -253,6 +253,18 @@ static std::wstring LowerExt(const std::wstring& name) {
   return ext;
 }
 
+// A shortcut stores its target raw, with %windir% and the like unexpanded.
+static std::wstring ExpandShortcutTarget(const wchar_t* raw) {
+  DWORD len = ExpandEnvironmentStringsW(raw, nullptr, 0);
+  if (len == 0) return raw;
+  std::wstring expanded(len, L'\0');
+  const DWORD written = ExpandEnvironmentStringsW(raw, &expanded[0], len);
+  if (written == 0 || written > len) return raw;
+  len = written;
+  expanded.resize(len - 1);
+  return expanded;
+}
+
 static std::wstring ResolveShortcut(const std::wstring& lnk) {
   IShellLinkW* link = nullptr;
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
@@ -266,7 +278,7 @@ static std::wstring ResolveShortcut(const std::wstring& lnk) {
       wchar_t buf[MAX_PATH] = {0};
       WIN32_FIND_DATAW fd = {0};
       if (SUCCEEDED(link->GetPath(buf, MAX_PATH, &fd, SLGP_RAWPATH)) && buf[0]) {
-        target = buf;
+        target = ExpandShortcutTarget(buf);
       }
     }
     pf->Release();
@@ -423,12 +435,22 @@ void GlitchVpnCorePlugin::HandleMethodCall(
           CoTaskMemFree(dir);
         }
       }
-      std::set<std::wstring> seen;
+      std::wstring ownName(MAX_PATH, L'\0');
+      for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, &ownName[0], (DWORD)ownName.size());
+        if (n == 0) { ownName.clear(); break; }
+        if (n < ownName.size()) { ownName.resize(n); break; }
+        ownName.resize(ownName.size() * 2);
+      }
+      ownName = ownName.substr(ownName.find_last_of(L"\\/") + 1);
+      for (auto& c : ownName) c = (wchar_t)towlower(c);
+      std::set<std::wstring> seen = {ownName};
       flutter::EncodableList list;
       for (auto& a : apps) {
         std::wstring base = a.second.substr(a.second.find_last_of(L"\\/") + 1);
         std::wstring key = base;
         for (auto& c : key) c = (wchar_t)towlower(c);
+        if (GetFileAttributesW(a.second.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
         if (!seen.insert(key).second) continue;
         flutter::EncodableMap m;
         m[flutter::EncodableValue("name")] = flutter::EncodableValue(WideToUtf8(a.first));
