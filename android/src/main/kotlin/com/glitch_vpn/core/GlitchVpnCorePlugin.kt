@@ -74,12 +74,29 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private val bgExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private fun loadInstalledApps(offset: Int, limit: Int?, includeSystem: Boolean, query: String?): Map<String, Any> {
+    private fun launcherPackages(pm: android.content.pm.PackageManager): Set<String> {
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        @Suppress("DEPRECATION")
+        return pm.queryIntentActivities(intent, 0).map { it.activityInfo.packageName }.toSet()
+    }
+
+    private fun loadInstalledApps(offset: Int, limit: Int?, launchableOnly: Boolean, query: String?): Map<String, Any> {
         val ctx = appContext ?: return emptyMap()
         val pm = ctx.packageManager
         val apps = pm.getInstalledApplications(0)
         val lowerQuery = query?.trim()?.lowercase()
-        val filteredBase = if (includeSystem) apps else apps.filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 }
+        val launchable = if (launchableOnly) launcherPackages(pm) else emptySet()
+        val filteredBase = apps.filter {
+            isListed(
+                it.packageName ?: "",
+                (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+                it.enabled,
+                launchable,
+                launchableOnly,
+                ctx.packageName,
+            )
+        }
         val filtered = if (lowerQuery.isNullOrEmpty()) filteredBase else filteredBase.filter { ai ->
             val pkg = ai.packageName ?: ""
             val name = pm.getApplicationLabel(ai)?.toString() ?: pkg
@@ -307,10 +324,10 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "appsListing" -> {
                 val offset = call.argument<Int>("offset") ?: 0
                 val limit = call.argument<Int>("limit")
-                val includeSystem = call.argument<Boolean>("includeSystem") ?: false
+                val launchableOnly = call.argument<Boolean>("launchableOnly") ?: true
                 val query = call.argument<String>("query")
                 bgExecutor.execute {
-                    val list = loadInstalledApps(offset, limit, includeSystem, query)
+                    val list = loadInstalledApps(offset, limit, launchableOnly, query)
                     mainHandler.post { result.success(list) }
                 }
             }

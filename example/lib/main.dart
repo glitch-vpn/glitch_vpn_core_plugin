@@ -164,6 +164,7 @@ class _CoreTestPageState extends State<CoreTestPage> {
   final _geoAssetsDirCtrl = TextEditingController();
   final _packageProbeCtrl = TextEditingController();
   String? _packageProbeResult;
+  String? _appsListingResult;
   final _dnsServersCtrl = TextEditingController(text: '1.1.1.1');
   final _fakeIpFilterCtrl = TextEditingController();
   final _dnsHostsCtrl = TextEditingController();
@@ -214,6 +215,19 @@ class _CoreTestPageState extends State<CoreTestPage> {
     final installed = await GlitchVpnCore.instance.appsInstalled(names);
     if (!mounted) return;
     setState(() => _packageProbeResult = 'installed: ${installed.toList()}');
+  }
+
+  Future<void> _listApps({required bool launchableOnly}) async {
+    final page = await GlitchVpnCore.instance.appsListing(
+      null,
+      launchableOnly: launchableOnly,
+    );
+    if (!mounted) return;
+    setState(
+      () => _appsListingResult =
+          'launchableOnly: $launchableOnly, ${page.total} apps, first: '
+          '${page.items.take(5).map((app) => app.packageName).toList()}',
+    );
   }
 
   VpnAlwaysOn? _alwaysOn;
@@ -794,6 +808,24 @@ class _CoreTestPageState extends State<CoreTestPage> {
                   child: const Text('check'),
                 ),
               ],
+            ),
+          if (Platform.isAndroid)
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => _listApps(launchableOnly: true),
+                  child: const Text('list launchable apps'),
+                ),
+                TextButton(
+                  onPressed: () => _listApps(launchableOnly: false),
+                  child: const Text('list all packages'),
+                ),
+              ],
+            ),
+          if (Platform.isAndroid && _appsListingResult != null)
+            SelectableText(
+              _appsListingResult!,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           if (Platform.isAndroid && _packageProbeResult != null)
             SelectableText(

@@ -2043,11 +2043,14 @@ class GlitchVpnCore {
     return GlitchVpnCoreFfi.instance.getCoreVersionsJson();
   }
 
+  /// Installed apps, Android only; the app itself is never listed. With
+  /// [launchableOnly] a system package is listed only when it has a launcher
+  /// entry; without it every package is.
   Future<AndroidAppsPage> appsListing(
     void Function(AndroidAppsPage)? callback, {
     int offset = 0,
     int? limit,
-    bool includeSystem = false,
+    bool launchableOnly = true,
     String? query,
   }) async {
     if (!Platform.isAndroid) {
@@ -2057,7 +2060,7 @@ class GlitchVpnCore {
     }
     final args = <String, Object?>{
       'offset': offset,
-      'includeSystem': includeSystem,
+      'launchableOnly': launchableOnly,
     };
     if (limit != null) args['limit'] = limit;
     if (query != null && query.trim().isNotEmpty) args['query'] = query.trim();
