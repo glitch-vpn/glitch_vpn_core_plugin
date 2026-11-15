@@ -7,7 +7,7 @@ dependencies:
   glitch_vpn_core:
     git:
       url: https://github.com/glitch-vpn/glitch_vpn_core_plugin.git
-      ref: v0.2.19
+      ref: v0.2.20
 ```
 
 Pin a release tag; a branch name moves under you. Each tag carries the core
@@ -197,6 +197,17 @@ the tunnel runs without a UAC prompt; without it, the process relaunches
 elevated. The build puts `glitch_vpn_core_service.exe` next to the app's
 executable; installing it as the service is the app installer's job. Debug
 builds always take the UAC route.
+
+The service admits only LocalSystem, the Administrators and the user at the
+console, on pipes it publishes under fresh names in
+`HKLM\SOFTWARE\glitch_vpn_core` (an uninstaller may remove the key); a plugin
+and a service from either side of v0.2.20 do not talk to each other, so the
+installer ships the service of the same release. The service runs the engines
+out of `%ProgramData%\GlitchVpnCore`, a folder it creates for LocalSystem and
+the Administrators alone (the installer should create it, so nobody else can
+first); `geoAssetsDir` is only read there, and a folder that lacks `geoip.dat`
+or `geosite.dat`, sits off a local drive or is reached through a junction or a
+symlink is refused.
 
 **Linux.** TUN via the native adapter; same API, no service.
 

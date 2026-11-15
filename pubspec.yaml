@@ -1,12 +1,12 @@
 name: glitch_vpn_core
 description: "Flutter FFI plugin for the libglitchcore VPN core: Xray (VLESS/VMess/Trojan/Shadowsocks) and mihomo (Hysteria2/TUIC/AnyTLS/WireGuard/AmneziaWG) engines behind one Dart API."
-version: 0.2.19
+version: 0.2.20
 homepage: https://github.com/glitch-vpn/glitch_vpn_core_plugin
 
 # Pinned core release for android/build.gradle and windows/CMakeLists.txt.
 # libglitchcore_sha256 is optional (release zip); when set, downloads are verified.
-libglitchcore_version: v0.2.17
-libglitchcore_sha256: 3212e1784b519a7a879438dc108da67954b25ee6afdf030db4d9910f66f3b2e9
+libglitchcore_version: v0.2.18
+libglitchcore_sha256: 2e4455e436ac187a1dee1874605dcbb8a46ee5f71b49e05818d7e87469bce6fb
 
 environment:
   sdk: ^3.8.1
