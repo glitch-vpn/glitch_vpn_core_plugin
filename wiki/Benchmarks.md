@@ -8,7 +8,7 @@ the Dart layer is a thin wrapper over the FFI and does not move them.
 The plugin bundles one native library per platform (xray + mihomo). Sizes for
 the current core are not measured.
 
-An APK that carries arm64 and x86_64 pays for both unless you split per ABI.
+An APK that carries armeabi-v7a, arm64-v8a and x86_64 pays for all three unless you split per ABI.
 Play Store delivery does that automatically; a bare APK does not.
 
 This is the number to attack if size matters: a build with fewer engines is
