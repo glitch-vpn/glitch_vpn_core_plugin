@@ -24,6 +24,8 @@ await GlitchVpnCore.instance.connect(
   tunnel, including the platform setup each OS needs.
 * **[Bottlenecks](Bottlenecks)** — platform limits and behaviour worth
   knowing before you design a screen around it.
+* **[Wi-Fi hotspot](Wi-Fi-Hotspot)** — sharing a connection over the
+  Windows Mobile hotspot.
 * **[Benchmarks](Benchmarks)** — what the tunnel costs in app size, memory
   and startup.
 * **[For Maintainers](For-Maintainers)** — working on the plugin itself.

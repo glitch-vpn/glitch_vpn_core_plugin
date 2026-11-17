@@ -14,6 +14,8 @@ import 'package:glitch_vpn_core/vpn_conn_channel.dart';
 import 'package:glitch_vpn_core/vpn_server_channel.dart';
 import 'package:glitch_vpn_core/vpn_ip_channel.dart';
 
+import 'hotspot_card.dart';
+
 void main() {
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks([
@@ -706,6 +708,8 @@ class _CoreTestPageState extends State<CoreTestPage> {
               _pingCard(),
               const SizedBox(height: 12),
               _relayCard(),
+              const SizedBox(height: 12),
+              if (Platform.isWindows) const HotspotCard(),
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: (s == VpnStatus.disconnecting)

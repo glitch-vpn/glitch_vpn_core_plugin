@@ -3,6 +3,7 @@
 * [Home](Home)
 * [Getting Started](Getting-Started)
 * [Bottlenecks](Bottlenecks)
+* [Wi-Fi hotspot](Wi-Fi-Hotspot)
 * [Benchmarks](Benchmarks)
 * [For Maintainers](For-Maintainers)
 
