@@ -50,6 +50,7 @@ jobs:
           curl -fL -o core.zip "https://github.com/glitch-vpn/libglitchcore/releases/download/$ver/libglitchcore-$ver.zip"
           mkdir -p build
           unzip -o -j core.zip 'ffi/libglitchcore.h' -d build
+          unzip -p core.zip THIRD_PARTY_GO_MODULES.txt | cmp - assets/THIRD_PARTY_GO_MODULES.txt
 
       - name: Stage Dart SDK headers (ffigen)
         run: |

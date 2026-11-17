@@ -80,4 +80,5 @@ assistance — openly, and held to the same gate as anything else.
 
 Plugin: MIT ([LICENSE](LICENSE)). The loaded core binaries are a separate work —
 compositions containing xray or mihomo are GPL-3.0. See the [core repo](https://github.com/glitch-vpn/libglitchcore) for
-per-composition attribution.
+per-composition attribution. The licence of every Go module the pinned core links ships with the
+plugin as an asset, `coreGoModuleNoticesAsset`, for an app's licences page.

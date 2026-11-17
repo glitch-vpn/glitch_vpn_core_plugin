@@ -80,6 +80,7 @@ lib/
 android/  windows/            # platform glue: VpnService/TUN, UAC/service
 linux/ ios/ macos/            # stubs (Linux engines still run via FFI)
 example/                      # full-API test client
+assets/                       # the core's Go module notices, copied at each bump
 test/                         # pure Dart unit tests (no native library)
 wiki/                         # user-facing docs (GitHub wiki page names);
                               # README stays short and links here
@@ -134,7 +135,8 @@ wiki/                         # user-facing docs (GitHub wiki page names);
   asked.
 - Consuming a new core: tag `v*` in libglitchcore → CI release → bump
   `libglitchcore_version` + `libglitchcore_sha256` **together** in
-  `pubspec.yaml`; regenerate bindings only if the header changed.
+  `pubspec.yaml`, and copy the core's `THIRD_PARTY_GO_MODULES.txt` at that tag
+  into `assets/`; regenerate bindings only if the header changed.
 
 ## 7. Commands
 

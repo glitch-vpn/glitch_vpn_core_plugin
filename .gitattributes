@@ -1,2 +1,3 @@
 Makefile text eol=lf
 *.mk text eol=lf
+assets/THIRD_PARTY_GO_MODULES.txt text eol=lf

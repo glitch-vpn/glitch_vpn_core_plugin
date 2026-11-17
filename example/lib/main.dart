@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -14,6 +15,11 @@ import 'package:glitch_vpn_core/vpn_server_channel.dart';
 import 'package:glitch_vpn_core/vpn_ip_channel.dart';
 
 void main() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'libglitchcore Go modules',
+    ], await rootBundle.loadString(coreGoModuleNoticesAsset));
+  });
   runZonedGuarded(() => runApp(const CoreTestApp()), (error, stack) {
     debugPrint('Uncaught error: $error\n$stack');
   });

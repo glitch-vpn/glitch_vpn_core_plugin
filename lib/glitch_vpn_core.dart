@@ -14,6 +14,12 @@ import 'package:glitch_vpn_core/vpn_conn_channel.dart';
 import 'package:glitch_vpn_core/vpn_server_channel.dart';
 import 'package:glitch_vpn_core/vpn_ip_channel.dart';
 
+/// The licence of every Go module the pinned core links, as the core's release
+/// generates it (`THIRD_PARTY_GO_MODULES.txt` at the core's tag); read it with
+/// `rootBundle.loadString`.
+const String coreGoModuleNoticesAsset =
+    'packages/glitch_vpn_core/assets/THIRD_PARTY_GO_MODULES.txt';
+
 /// Plugin-wide defaults; per-call [connect] args override them.
 class GlitchVpnCoreConfig {
   static const int defaultTunMtu = 1420;

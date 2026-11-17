@@ -25,6 +25,8 @@ dev_dependencies:
   ffigen: ^20.1.1
 
 flutter:
+  assets:
+    - assets/THIRD_PARTY_GO_MODULES.txt
   plugin:
     ffiPlugin: true
     platforms:

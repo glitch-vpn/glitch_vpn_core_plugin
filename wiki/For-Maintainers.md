@@ -66,7 +66,8 @@ is how a new session shows the previous one's data.
 
 Tag the core, let its CI publish the release, then move
 `libglitchcore_version` **and** `libglitchcore_sha256` in `pubspec.yaml` in the
-same commit. New opts keys only work against the core that reads them; shipping
+same commit, and copy the core's `THIRD_PARTY_GO_MODULES.txt` at that tag into
+`assets/` (CI compares it with the release). New opts keys only work against the core that reads them; shipping
 the plugin first means those settings are silently ignored.
 
 ## Working with LLM assistance
