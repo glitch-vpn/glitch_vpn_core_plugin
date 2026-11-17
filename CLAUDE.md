@@ -77,6 +77,7 @@ lib/
   vpn_conn_channel.dart       # connection inspector (opt-in)
   vpn_server_channel.dart     # connected server / balancer pick (302)
   vpn_ip_channel.dart         # external IPv4/IPv6 (303)
+  vpn_hotspot_channel.dart     # Windows Wi-Fi hotspot (WinRT, unelevated)
 android/  windows/            # platform glue: VpnService/TUN, UAC/service
 linux/ ios/ macos/            # stubs (Linux engines still run via FFI)
 example/                      # full-API test client
