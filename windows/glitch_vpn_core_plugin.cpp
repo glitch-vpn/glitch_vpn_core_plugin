@@ -1,4 +1,5 @@
 #include "glitch_vpn_core_plugin.h"
+#include "hotspot.h"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -519,6 +520,43 @@ void GlitchVpnCorePlugin::HandleMethodCall(
   if (method == "appsIcon") {
     result->Success(flutter::EncodableValue(true));
     return;
+  }
+
+  if (method.rfind("hotspot", 0) == 0) {
+    const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    auto text = [args](const char* key) {
+      std::string value;
+      if (args) {
+        auto it = args->find(flutter::EncodableValue(key));
+        if (it != args->end()) {
+          if (const auto* s = std::get_if<std::string>(&it->second)) value = *s;
+        }
+      }
+      return value;
+    };
+    std::function<flutter::EncodableValue()> work;
+    if (method == "hotspotCapability") {
+      work = [] { return hotspot::Capability(); };
+    } else if (method == "hotspotStart") {
+      work = [ssid = text("ssid"), passphrase = text("passphrase"),
+              band = text("band")] {
+        return hotspot::Start(ssid, passphrase, band);
+      };
+    } else if (method == "hotspotStop") {
+      work = [] { return hotspot::Stop(); };
+    } else if (method == "hotspotStatus") {
+      work = [] { return hotspot::Status(); };
+    } else if (method == "hotspotClients") {
+      work = [] { return hotspot::Clients(); };
+    } else if (method == "hotspotRestartOn") {
+      work = [connection = text("connection")] {
+        return hotspot::RestartOn(connection);
+      };
+    }
+    if (work) {
+      RunAsync(std::move(result), std::move(work));
+      return;
+    }
   }
 
   if (method == "getPlatformVersion") {

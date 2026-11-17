@@ -20,6 +20,8 @@ set(PLUGIN_NAME "glitch_vpn_core_plugin")
 list(APPEND PLUGIN_SOURCES
   "glitch_vpn_core_plugin.cpp"
   "glitch_vpn_core_plugin.h"
+  "hotspot.cpp"
+  "hotspot.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -54,6 +56,9 @@ target_link_libraries(${PLUGIN_NAME}
   Advapi32
   gdiplus
   Ole32
+  windowsapp
+  iphlpapi
+  Crypt32
 )
 
 # Binaries source: LIBGLITCHCORE_LOCAL → a local, gitignored windows/libs/ that
@@ -143,7 +148,7 @@ target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 # The test binary compiles the plugin sources directly, so it needs the same
 # native libs (icon extraction uses GDI+ / COM streams; shell APIs for enum).
-target_link_libraries(${TEST_RUNNER} PRIVATE shell32 Advapi32 gdiplus Ole32)
+target_link_libraries(${TEST_RUNNER} PRIVATE shell32 Advapi32 gdiplus Ole32 windowsapp iphlpapi Crypt32)
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
