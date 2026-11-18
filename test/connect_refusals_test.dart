@@ -43,6 +43,28 @@ void main() {
     fail('connect() returned without refusing');
   }
 
+  test('a connect waits for a stop in progress to report its end', () async {
+    VpnStatusChannel.instance.emit(VpnStatus.disconnecting);
+    PlatformException? refusal;
+    final connecting = refusalOf(
+      (core) => core.connect(
+        engine: VpnEngine.xray,
+        config: 'x',
+        notification: _texts,
+        balancerStrategy: 'url-test',
+      ),
+    ).then((e) => refusal = e);
+
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(refusal, isNull);
+    // Not forced to disconnected ahead of the core's own report.
+    expect(VpnStatusChannel.instance.value.status, VpnStatus.disconnecting);
+
+    VpnStatusChannel.instance.emit(VpnStatus.disconnected);
+    await connecting;
+    expect(refusal?.code, 'UNSUPPORTED_STRATEGY');
+  });
+
   group('connect refuses with a code', () {
     test('BUSY while a session is in progress, keeping its status', () async {
       VpnStatusChannel.instance.emit(VpnStatus.connecting);
