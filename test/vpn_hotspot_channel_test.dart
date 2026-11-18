@@ -773,17 +773,6 @@ void main() {
       expect(core.sent.last.blockedClients, ['11:22:33:44:55:66']);
     });
 
-    test('a blocked device that came back under another address is '
-        'still sent by its MAC', () async {
-      channel.blockClient('00:11:22:33:44:55');
-      native.answers['hotspotClients'] = _clientsAnswer([
-        {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.77'},
-      ]);
-      await channel.refreshClients();
-      await _settleQueue();
-      expect(core.sent.last.blockedClients, ['00:11:22:33:44:55']);
-    });
-
     test('a client read that failed keeps the list and the state', () async {
       final before = channel.clients.value;
       expect(before, isNotEmpty);

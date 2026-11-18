@@ -74,11 +74,11 @@ switch.
 ## Devices
 
 `clients` lists the connected devices (name, MAC, IPv4) and, after them, blocked
-devices that are not connected, with the name and address they had when last
+devices that are not connected, with the name they had when last
 seen. It is read every three seconds while the hotspot is on, and by
 `refreshClients()`. Windows lists the devices ICS has leased an address to, so
-a device with a static address is never listed and cannot be blocked by
-address.
+a device with a static address is never listed; a device is blocked by its
+MAC address whether it is listed or not.
 
 ## The core's sharing
 
@@ -114,7 +114,7 @@ Nothing restarts the hotspot on the tunnel's profile: Windows turns a hotspot
 shared from it off with the tunnel.
 
 `setBlockWhileTunnelDown` (on by default), `blockClient` and `unblockClient`
-change the wanted state. At most eight blocked clients are sent, by the IPv4
-each was last seen with, listed or not. The Windows Mobile hotspot cannot
-disconnect a device, so a blocked device stays joined and its traffic is
-dropped. The core is Windows-only here; other platforms answer `unsupported`.
+change the wanted state. At most eight blocked clients are sent, by their MAC
+addresses, listed or not. The Windows Mobile hotspot cannot disconnect a
+device, so the core drops every frame the device sends in on the hotspot, and
+Android leaves the network after a while. The core is Windows-only here; other platforms answer `unsupported`.
