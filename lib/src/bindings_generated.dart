@@ -256,6 +256,25 @@ class GlitchCoreBindings {
   late final _SetUseServiceIPC =
       _SetUseServiceIPCPtr.asFunction<void Function(int)>();
 
+  int PrepareHotspot() {
+    return _PrepareHotspot();
+  }
+
+  late final _PrepareHotspotPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function()>>('PrepareHotspot');
+  late final _PrepareHotspot = _PrepareHotspotPtr.asFunction<int Function()>();
+
+  int SetHotspotSharing(ffi.Pointer<ffi.Char> cRequestJSON) {
+    return _SetHotspotSharing(cRequestJSON);
+  }
+
+  late final _SetHotspotSharingPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Pointer<ffi.Char>)>>(
+        'SetHotspotSharing',
+      );
+  late final _SetHotspotSharing =
+      _SetHotspotSharingPtr.asFunction<int Function(ffi.Pointer<ffi.Char>)>();
+
   int ListenStats(int delayMs) {
     return _ListenStats(delayMs);
   }
