@@ -1688,15 +1688,13 @@ class GlitchVpnCore {
         if (active.isNotEmpty) engine = active;
       } catch (_) {}
 
-      if (engine.isNotEmpty) {
-        GlitchVpnCoreFfi.instance.engineStop(engine);
-      } else {
-        // No running core: 504 will never arrive to do the cleanup.
+      // No running core, or one that refused the stop: no report of the
+      // stop's end will arrive to do the cleanup.
+      if (engine.isEmpty || GlitchVpnCoreFfi.instance.engineStop(engine) != 0) {
         await _stopTunnelSilently();
         _activeTunnel = null;
         _resetSessionChannels();
         VpnStatusChannel.instance.emit(VpnStatus.disconnected);
-        return;
       }
     });
   }
