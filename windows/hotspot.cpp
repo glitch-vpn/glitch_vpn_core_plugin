@@ -1,11 +1,12 @@
-#include "hotspot.h"
-
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <Windows.h>
 #include <iphlpapi.h>
 #include <shlobj.h>
 #include <wincrypt.h>
+
+#include "hotspot.h"
+#include "hotspot_internal.h"
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -24,16 +25,96 @@
 
 namespace glitch_vpn_core::hotspot {
 
+namespace detail {
+
+namespace {
+constexpr wchar_t kTunnelAdapterPrefix[] = L"GlitchVPN";
+constexpr uint32_t kIfTypeWifi = 71;
+constexpr uint32_t kIfTypeEthernet = 6;
+
+std::wstring Lower(std::wstring s) {
+  for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
+  return s;
+}
+
+void AppendString(std::string& out, const std::string& s) {
+  const uint32_t n = static_cast<uint32_t>(s.size());
+  out.append(reinterpret_cast<const char*>(&n), sizeof(n));
+  out += s;
+}
+
+bool ReadString(const std::string& in, size_t& pos, std::string& s) {
+  uint32_t n = 0;
+  if (pos + sizeof(n) > in.size()) return false;
+  memcpy(&n, in.data() + pos, sizeof(n));
+  pos += sizeof(n);
+  if (n > in.size() - pos) return false;
+  s.assign(in, pos, n);
+  pos += n;
+  return true;
+}
+}  // namespace
+
+bool IsTunnel(const AdapterInfo& adapter) {
+  return adapter.name.rfind(kTunnelAdapterPrefix, 0) == 0;
+}
+
+bool IsPhysical(const AdapterInfo& adapter) {
+  if (!adapter.up || IsTunnel(adapter)) return false;
+  if (adapter.type != kIfTypeWifi && adapter.type != kIfTypeEthernet) {
+    return false;
+  }
+  const std::wstring description = Lower(adapter.description);
+  for (const wchar_t* soft : {L"virtual", L"hyper-v", L"wintun", L"tap-",
+                              L"wireguard", L"vpn", L"loopback"}) {
+    if (description.find(soft) != std::wstring::npos) return false;
+  }
+  return true;
+}
+
+bool IsValidSsid(const std::string& ssid) {
+  return !ssid.empty() && ssid.size() <= 32;
+}
+
+bool IsValidPassphrase(const std::string& passphrase) {
+  if (passphrase.size() < 8 || passphrase.size() > 63) return false;
+  return std::all_of(passphrase.begin(), passphrase.end(), [](unsigned char c) {
+    return c >= 0x20 && c <= 0x7e;
+  });
+}
+
+std::string EncodeSavedState(const SavedState& state) {
+  std::string out;
+  AppendString(out, state.ssid);
+  AppendString(out, state.passphrase);
+  out.push_back(static_cast<char>(state.band));
+  out.push_back(state.timeout_was_enabled ? 1 : 0);
+  return out;
+}
+
+std::optional<SavedState> DecodeSavedState(const std::string& bytes) {
+  SavedState state;
+  size_t pos = 0;
+  if (!ReadString(bytes, pos, state.ssid) ||
+      !ReadString(bytes, pos, state.passphrase) || pos + 2 != bytes.size()) {
+    return std::nullopt;
+  }
+  state.band = static_cast<int>(static_cast<signed char>(bytes[pos]));
+  state.timeout_was_enabled = bytes[pos + 1] != 0;
+  return state;
+}
+
+}  // namespace detail
+
 namespace winnet = winrt::Windows::Networking::Connectivity;
 namespace winop = winrt::Windows::Networking::NetworkOperators;
+using detail::AdapterInfo;
+using detail::SavedState;
 using flutter::EncodableList;
 using flutter::EncodableMap;
 using flutter::EncodableValue;
 
 namespace {
-
-// The tunnel's Wintun adapter; the name may carry a numeric suffix.
-constexpr wchar_t kTunnelAdapterPrefix[] = L"GlitchVPN";
 
 // Concurrent calls would race on the one tethering state Windows keeps.
 std::mutex g_mutex;
@@ -46,29 +127,29 @@ struct MtaScope {
   }
 };
 
-EncodableValue Failure(const std::string& reason, const std::string& detail) {
+// A failure. running, when given, is whether the hotspot runs afterwards.
+EncodableValue Failure(const std::string& reason, const std::string& detail,
+                       std::optional<bool> running = std::nullopt) {
   EncodableMap m;
   m[EncodableValue("reason")] = EncodableValue(reason);
   m[EncodableValue("detail")] = EncodableValue(detail);
+  if (running) m[EncodableValue("running")] = EncodableValue(*running);
   return EncodableValue(m);
 }
 
-EncodableValue Ok() {
+EncodableValue Ok(bool running, bool restarted = false) {
   EncodableMap m;
-  m[EncodableValue("ok")] = EncodableValue(true);
+  m[EncodableValue("running")] = EncodableValue(running);
+  m[EncodableValue("restarted")] = EncodableValue(restarted);
   return EncodableValue(m);
+}
+
+bool IsRunning(winop::NetworkOperatorTetheringManager& manager) {
+  return manager.TetheringOperationalState() !=
+         winop::TetheringOperationalState::Off;
 }
 
 // === Adapters ===
-
-struct AdapterInfo {
-  winrt::guid id;
-  std::wstring name;
-  std::wstring description;
-  DWORD type = 0;
-  bool up = false;
-  ULONG metric = 0;
-};
 
 std::vector<AdapterInfo> ListAdapters() {
   ULONG size = 32 * 1024;
@@ -91,10 +172,8 @@ std::vector<AdapterInfo> ListAdapters() {
     std::wstring guid_text(static_cast<size_t>(wide_length), L'\0');
     MultiByteToWideChar(CP_ACP, 0, a->AdapterName, -1, guid_text.data(),
                         wide_length);
-    GUID guid;
-    if (FAILED(CLSIDFromString(guid_text.c_str(), &guid))) continue;
     AdapterInfo info;
-    info.id = winrt::guid(guid);
+    if (FAILED(CLSIDFromString(guid_text.c_str(), &info.id))) continue;
     info.name = a->FriendlyName ? a->FriendlyName : L"";
     info.description = a->Description ? a->Description : L"";
     info.type = a->IfType;
@@ -105,35 +184,11 @@ std::vector<AdapterInfo> ListAdapters() {
   return out;
 }
 
-std::wstring Lower(std::wstring s) {
-  for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
-  return s;
-}
-
-bool IsTunnel(const AdapterInfo& a) {
-  return a.name.rfind(kTunnelAdapterPrefix, 0) == 0;
-}
-
-// A physical Wi-Fi or Ethernet adapter that is up. Software adapters (the
-// tunnel, Hyper-V and WSL switches, VM and VPN adapters, the hotspot's own
-// Wi-Fi Direct adapter) are not.
-bool IsPhysical(const AdapterInfo& a) {
-  if (!a.up || IsTunnel(a)) return false;
-  if (a.type != IF_TYPE_IEEE80211 && a.type != IF_TYPE_ETHERNET_CSMACD) {
-    return false;
-  }
-  const std::wstring description = Lower(a.description);
-  for (const wchar_t* soft : {L"virtual", L"hyper-v", L"wintun", L"tap-",
-                              L"wireguard", L"vpn", L"loopback"}) {
-    if (description.find(soft) != std::wstring::npos) return false;
-  }
-  return true;
-}
-
 const AdapterInfo* FindAdapter(const std::vector<AdapterInfo>& adapters,
                                const winrt::guid& id) {
+  const GUID wanted = id;
   for (const auto& a : adapters) {
-    if (a.id == id) return &a;
+    if (IsEqualGUID(a.id, wanted)) return &a;
   }
   return nullptr;
 }
@@ -141,13 +196,13 @@ const AdapterInfo* FindAdapter(const std::vector<AdapterInfo>& adapters,
 std::optional<winnet::ConnectionProfile> PickPhysicalProfile() {
   const auto adapters = ListAdapters();
   std::optional<winnet::ConnectionProfile> best;
-  ULONG best_metric = 0;
+  uint32_t best_metric = 0;
   for (const auto& profile : winnet::NetworkInformation::GetConnectionProfiles()) {
     try {
       const auto adapter = profile.NetworkAdapter();
       if (!adapter) continue;
       const auto* info = FindAdapter(adapters, adapter.NetworkAdapterId());
-      if (!info || !IsPhysical(*info)) continue;
+      if (!info || !detail::IsPhysical(*info)) continue;
       if (profile.GetNetworkConnectivityLevel() !=
           winnet::NetworkConnectivityLevel::InternetAccess) {
         continue;
@@ -161,20 +216,6 @@ std::optional<winnet::ConnectionProfile> PickPhysicalProfile() {
     }
   }
   return best;
-}
-
-std::optional<winnet::ConnectionProfile> PickTunnelProfile() {
-  const auto adapters = ListAdapters();
-  for (const auto& profile : winnet::NetworkInformation::GetConnectionProfiles()) {
-    try {
-      const auto adapter = profile.NetworkAdapter();
-      if (!adapter) continue;
-      const auto* info = FindAdapter(adapters, adapter.NetworkAdapterId());
-      if (info && info->up && IsTunnel(*info)) return profile;
-    } catch (const winrt::hresult_error&) {
-    }
-  }
-  return std::nullopt;
 }
 
 // Any manager reads and stops the one hotspot Windows has: the physical
@@ -199,30 +240,16 @@ std::optional<winop::NetworkOperatorTetheringManager> AnyManager() {
 
 // === Messages ===
 
-std::string CapabilityDetail(winop::TetheringCapability c) {
-  using winop::TetheringCapability;
-  switch (c) {
-    case TetheringCapability::DisabledByGroupPolicy:
-      return "disabled by group policy";
-    case TetheringCapability::DisabledByHardwareLimitation:
-      return "no Wi-Fi adapter with access point support";
-    case TetheringCapability::DisabledByOperator:
-      return "disabled by the network operator";
-    case TetheringCapability::DisabledBySku:
-      return "not available in this edition of Windows";
-    case TetheringCapability::DisabledByRequiredAppNotInstalled:
-      return "a required system app is not installed";
-    case TetheringCapability::DisabledDueToUnknownCause:
-      return "disabled for an unknown reason";
-    case TetheringCapability::DisabledBySystemCapability:
-      return "disabled by the system";
-    default:
-      return "capability " + std::to_string(static_cast<int>(c));
+// The reason code of a system that cannot host a hotspot.
+std::string CapabilityCode(winop::TetheringCapability c) {
+  if (c == winop::TetheringCapability::DisabledByHardwareLimitation) {
+    return "noAdapter";
   }
+  return "cannotHost";
 }
 
 EncodableValue OperationFailure(winop::TetheringOperationStatus status,
-                                const winrt::hstring& extra) {
+                                const winrt::hstring& extra, bool running) {
   using winop::TetheringOperationStatus;
   std::string reason = "startFailed";
   std::string detail;
@@ -246,7 +273,7 @@ EncodableValue OperationFailure(winop::TetheringOperationStatus status,
       break;
   }
   if (!extra.empty()) detail += ": " + winrt::to_string(extra);
-  return Failure(reason, detail);
+  return Failure(reason, detail, running);
 }
 
 // === Bands ===
@@ -281,56 +308,30 @@ EncodableList SupportedBands(
 // back on stop. The hotspot outlives the process that started it, so the copy
 // lives in a file, protected with DPAPI for the current user.
 
-struct SavedState {
-  std::string ssid;
-  std::string passphrase;
-  int band = 0;
-  bool timeout_was_enabled = false;
-};
-
-std::wstring SavedStatePath() {
+// The folder is made only when create is set, for a write.
+std::wstring SavedStatePath(bool create) {
   PWSTR folder = nullptr;
   std::wstring path;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &folder))) {
     path = folder;
     CoTaskMemFree(folder);
     path += L"\\glitch_vpn_core";
-    CreateDirectoryW(path.c_str(), nullptr);
+    if (create) CreateDirectoryW(path.c_str(), nullptr);
     path += L"\\hotspot-saved.bin";
   }
   return path;
 }
 
-void AppendString(std::string& out, const std::string& s) {
-  const uint32_t n = static_cast<uint32_t>(s.size());
-  out.append(reinterpret_cast<const char*>(&n), sizeof(n));
-  out += s;
-}
-
-bool ReadString(const std::string& in, size_t& pos, std::string& s) {
-  uint32_t n = 0;
-  if (pos + sizeof(n) > in.size()) return false;
-  memcpy(&n, in.data() + pos, sizeof(n));
-  pos += sizeof(n);
-  if (pos + n > in.size()) return false;
-  s.assign(in, pos, n);
-  pos += n;
-  return true;
-}
-
 bool WriteSavedState(const SavedState& state) {
-  const std::wstring path = SavedStatePath();
+  const std::wstring path = SavedStatePath(true);
   if (path.empty()) return false;
-  std::string plain;
-  AppendString(plain, state.ssid);
-  AppendString(plain, state.passphrase);
-  plain.push_back(static_cast<char>(state.band));
-  plain.push_back(state.timeout_was_enabled ? 1 : 0);
+  std::string plain = detail::EncodeSavedState(state);
   DATA_BLOB in{static_cast<DWORD>(plain.size()),
                reinterpret_cast<BYTE*>(plain.data())};
   DATA_BLOB out{};
   if (!CryptProtectData(&in, L"hotspot", nullptr, nullptr, nullptr,
                         CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+    SecureZeroMemory(plain.data(), plain.size());
     return false;
   }
   std::ofstream file(path, std::ios::binary | std::ios::trunc);
@@ -343,7 +344,7 @@ bool WriteSavedState(const SavedState& state) {
 }
 
 std::optional<SavedState> ReadSavedState() {
-  const std::wstring path = SavedStatePath();
+  const std::wstring path = SavedStatePath(false);
   if (path.empty()) return std::nullopt;
   std::ifstream file(path, std::ios::binary);
   if (!file) return std::nullopt;
@@ -359,20 +360,13 @@ std::optional<SavedState> ReadSavedState() {
   std::string plain(reinterpret_cast<const char*>(out.pbData), out.cbData);
   SecureZeroMemory(out.pbData, out.cbData);
   LocalFree(out.pbData);
-  SavedState state;
-  size_t pos = 0;
-  if (!ReadString(plain, pos, state.ssid) ||
-      !ReadString(plain, pos, state.passphrase) || pos + 2 > plain.size()) {
-    return std::nullopt;
-  }
-  state.band = plain[pos];
-  state.timeout_was_enabled = plain[pos + 1] != 0;
+  auto state = detail::DecodeSavedState(plain);
   SecureZeroMemory(plain.data(), plain.size());
   return state;
 }
 
 void DeleteSavedState() {
-  const std::wstring path = SavedStatePath();
+  const std::wstring path = SavedStatePath(false);
   if (!path.empty()) DeleteFileW(path.c_str());
 }
 
@@ -409,17 +403,6 @@ void WaitOutTransition(winop::NetworkOperatorTetheringManager& manager) {
   }
 }
 
-bool IsValidSsid(const std::string& ssid) {
-  return !ssid.empty() && ssid.size() <= 32;
-}
-
-bool IsValidPassphrase(const std::string& passphrase) {
-  if (passphrase.size() < 8 || passphrase.size() > 63) return false;
-  return std::all_of(passphrase.begin(), passphrase.end(), [](unsigned char c) {
-    return c >= 0x20 && c <= 0x7e;
-  });
-}
-
 bool SameConfiguration(
     const winop::NetworkOperatorTetheringAccessPointConfiguration& config,
     const std::string& ssid, const std::string& passphrase,
@@ -427,14 +410,6 @@ bool SameConfiguration(
   return winrt::to_string(config.Ssid()) == ssid &&
          winrt::to_string(config.Passphrase()) == passphrase &&
          config.Band() == band;
-}
-
-EncodableValue StartOn(winop::NetworkOperatorTetheringManager& manager) {
-  const auto result = manager.StartTetheringAsync().get();
-  if (result.Status() != winop::TetheringOperationStatus::Success) {
-    return OperationFailure(result.Status(), result.AdditionalErrorMessage());
-  }
-  return Ok();
 }
 
 }  // namespace
@@ -453,7 +428,7 @@ EncodableValue Capability() {
         GetTetheringCapabilityFromConnectionProfile(*profile);
     if (capability != winop::TetheringCapability::Enabled) {
       out[EncodableValue("supported")] = EncodableValue(false);
-      out[EncodableValue("reason")] = EncodableValue(CapabilityDetail(capability));
+      out[EncodableValue("reason")] = EncodableValue(CapabilityCode(capability));
       return EncodableValue(out);
     }
     auto manager =
@@ -462,16 +437,16 @@ EncodableValue Capability() {
     out[EncodableValue("supported")] = EncodableValue(true);
     out[EncodableValue("bands")] = EncodableValue(
         SupportedBands(manager.GetCurrentAccessPointConfiguration()));
-  } catch (const winrt::hresult_error& e) {
+  } catch (const winrt::hresult_error&) {
     out[EncodableValue("supported")] = EncodableValue(false);
-    out[EncodableValue("reason")] = EncodableValue(winrt::to_string(e.message()));
+    out[EncodableValue("reason")] = EncodableValue("unknown");
   }
   return EncodableValue(out);
 }
 
 EncodableValue Start(const std::string& ssid, const std::string& passphrase,
                      const std::string& band_name) {
-  if (!IsValidSsid(ssid) || !IsValidPassphrase(passphrase)) {
+  if (!detail::IsValidSsid(ssid) || !detail::IsValidPassphrase(passphrase)) {
     return Failure("invalidCredentials",
                    "the name is 1 to 32 bytes, the password 8 to 63 characters");
   }
@@ -489,7 +464,7 @@ EncodableValue Start(const std::string& ssid, const std::string& passphrase,
     const auto capability = winop::NetworkOperatorTetheringManager::
         GetTetheringCapabilityFromConnectionProfile(*profile);
     if (capability != winop::TetheringCapability::Enabled) {
-      return Failure("unsupported", CapabilityDetail(capability));
+      return Failure("unsupported", CapabilityCode(capability));
     }
     auto manager =
         winop::NetworkOperatorTetheringManager::CreateFromConnectionProfile(
@@ -516,19 +491,20 @@ EncodableValue Start(const std::string& ssid, const std::string& passphrase,
 
     // A hotspot of an earlier process with this configuration is kept; one
     // with another configuration is stopped before it is reconfigured.
-    const bool running =
+    const bool was_running =
         manager.TetheringOperationalState() == winop::TetheringOperationalState::On;
-    if (running && SameConfiguration(config, ssid, passphrase, *band)) {
+    if (was_running && SameConfiguration(config, ssid, passphrase, *band)) {
       if (winop::NetworkOperatorTetheringManager::IsNoConnectionsTimeoutEnabled()) {
         winop::NetworkOperatorTetheringManager::DisableNoConnectionsTimeoutAsync()
             .get();
       }
-      return Ok();
+      return Ok(true);
     }
-    if (running) {
+    if (was_running) {
       const auto stopped = manager.StopTetheringAsync().get();
       if (stopped.Status() != winop::TetheringOperationStatus::Success) {
-        return OperationFailure(stopped.Status(), stopped.AdditionalErrorMessage());
+        return OperationFailure(stopped.Status(), stopped.AdditionalErrorMessage(),
+                                IsRunning(manager));
       }
     }
 
@@ -539,20 +515,20 @@ EncodableValue Start(const std::string& ssid, const std::string& passphrase,
       manager.ConfigureAccessPointAsync(config).get();
     } catch (const winrt::hresult_error& e) {
       RestoreUserState(manager);
-      return Failure("configureFailed", winrt::to_string(e.message()));
+      return Failure("configureFailed", winrt::to_string(e.message()),
+                     IsRunning(manager));
     }
     if (winop::NetworkOperatorTetheringManager::IsNoConnectionsTimeoutEnabled()) {
       winop::NetworkOperatorTetheringManager::DisableNoConnectionsTimeoutAsync()
           .get();
     }
-    EncodableValue started = StartOn(manager);
-    if (std::holds_alternative<EncodableMap>(started)) {
-      const auto& map = std::get<EncodableMap>(started);
-      if (map.find(EncodableValue("reason")) != map.end()) {
-        RestoreUserState(manager);
-      }
+    const auto result = manager.StartTetheringAsync().get();
+    if (result.Status() != winop::TetheringOperationStatus::Success) {
+      RestoreUserState(manager);
+      return OperationFailure(result.Status(), result.AdditionalErrorMessage(),
+                              IsRunning(manager));
     }
-    return started;
+    return Ok(true, was_running);
   } catch (const winrt::hresult_error& e) {
     return Failure("startFailed", winrt::to_string(e.message()));
   }
@@ -564,25 +540,27 @@ EncodableValue Stop() {
   try {
     auto manager = AnyManager();
     if (!manager) {
-      // No connection gives a manager, so nothing can be running; the saved
-      // settings wait for one.
-      return Ok();
+      // Nothing can be read or stopped, so nothing is known about the
+      // hotspot, and the saved settings wait for a connection.
+      return Failure("noConnection", "no connection gives a tethering manager");
     }
     WaitOutTransition(*manager);
     if (manager->TetheringOperationalState() !=
         winop::TetheringOperationalState::Off) {
       const auto result = manager->StopTetheringAsync().get();
       if (result.Status() != winop::TetheringOperationStatus::Success) {
-        return OperationFailure(result.Status(), result.AdditionalErrorMessage());
+        return OperationFailure(result.Status(), result.AdditionalErrorMessage(),
+                                IsRunning(*manager));
       }
     }
     if (!RestoreUserState(*manager)) {
       return Failure("configureFailed",
-                     "the previous hotspot settings could not be restored");
+                     "the previous hotspot settings could not be restored",
+                     false);
     }
-    return Ok();
+    return Ok(false);
   } catch (const winrt::hresult_error& e) {
-    return Failure("startFailed", winrt::to_string(e.message()));
+    return Failure("stopFailed", winrt::to_string(e.message()));
   }
 }
 
@@ -590,7 +568,7 @@ EncodableValue Status() {
   std::lock_guard<std::mutex> lock(g_mutex);
   MtaScope com;
   EncodableMap out;
-  out[EncodableValue("state")] = EncodableValue("off");
+  out[EncodableValue("state")] = EncodableValue("unknown");
   out[EncodableValue("ours")] = EncodableValue(ReadSavedState().has_value());
   try {
     auto manager = AnyManager();
@@ -602,12 +580,16 @@ EncodableValue Status() {
       case winop::TetheringOperationalState::InTransition:
         out[EncodableValue("state")] = EncodableValue("transition");
         break;
+      case winop::TetheringOperationalState::Off:
+        out[EncodableValue("state")] = EncodableValue("off");
+        break;
       default:
         break;
     }
     out[EncodableValue("ssid")] = EncodableValue(
         winrt::to_string(manager->GetCurrentAccessPointConfiguration().Ssid()));
   } catch (const winrt::hresult_error&) {
+    out[EncodableValue("state")] = EncodableValue("unknown");
   }
   return EncodableValue(out);
 }
@@ -639,40 +621,13 @@ EncodableValue Clients() {
         list.push_back(EncodableValue(m));
       }
     }
-  } catch (const winrt::hresult_error&) {
+  } catch (const winrt::hresult_error& e) {
+    // A read error is not an empty list: the caller keeps what it had.
+    return Failure("unknown", winrt::to_string(e.message()));
   }
   EncodableMap out;
   out[EncodableValue("clients")] = EncodableValue(list);
   return EncodableValue(out);
-}
-
-EncodableValue RestartOn(const std::string& connection) {
-  if (connection != "tunnel" && connection != "wifi") {
-    return Failure("startFailed", "unknown connection " + connection);
-  }
-  std::lock_guard<std::mutex> lock(g_mutex);
-  MtaScope com;
-  try {
-    const auto profile =
-        connection == "tunnel" ? PickTunnelProfile() : PickPhysicalProfile();
-    if (!profile) {
-      return Failure("noConnection", "no " + connection + " connection to share");
-    }
-    auto manager =
-        winop::NetworkOperatorTetheringManager::CreateFromConnectionProfile(
-            *profile);
-    WaitOutTransition(manager);
-    if (manager.TetheringOperationalState() ==
-        winop::TetheringOperationalState::On) {
-      const auto stopped = manager.StopTetheringAsync().get();
-      if (stopped.Status() != winop::TetheringOperationStatus::Success) {
-        return OperationFailure(stopped.Status(), stopped.AdditionalErrorMessage());
-      }
-    }
-    return StartOn(manager);
-  } catch (const winrt::hresult_error& e) {
-    return Failure("startFailed", winrt::to_string(e.message()));
-  }
 }
 
 }  // namespace glitch_vpn_core::hotspot

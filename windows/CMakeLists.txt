@@ -22,6 +22,7 @@ list(APPEND PLUGIN_SOURCES
   "glitch_vpn_core_plugin.h"
   "hotspot.cpp"
   "hotspot.h"
+  "hotspot_internal.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -140,6 +141,7 @@ FetchContent_MakeAvailable(googletest)
 # directly into the test binary rather than using the DLL.
 add_executable(${TEST_RUNNER}
   test/glitch_vpn_core_plugin_test.cpp
+  test/hotspot_test.cpp
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})

@@ -548,10 +548,6 @@ void GlitchVpnCorePlugin::HandleMethodCall(
       work = [] { return hotspot::Status(); };
     } else if (method == "hotspotClients") {
       work = [] { return hotspot::Clients(); };
-    } else if (method == "hotspotRestartOn") {
-      work = [connection = text("connection")] {
-        return hotspot::RestartOn(connection);
-      };
     }
     if (work) {
       RunAsync(std::move(result), std::move(work));
