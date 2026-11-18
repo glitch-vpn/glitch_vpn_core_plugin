@@ -522,6 +522,13 @@ class VpnHotspotChannel {
     _pushSharing();
   }
 
+  /// The core reports an engine connecting. A service that crashed and came
+  /// back has no hotspot state, and nothing else tells the plugin, so the
+  /// state is sent again if the hotspot is on, before the tunnel is up. The
+  /// core turns forwarding off at connecting and shares again at every
+  /// tunnel-up, so this adds no extra switch.
+  void coreSessionStarting() => coreReattached();
+
   /// Event 600 from the core. A malformed payload is dropped.
   void handleCoreEvent(String json) {
     final event = HotspotSharingEvent.tryParse(json);

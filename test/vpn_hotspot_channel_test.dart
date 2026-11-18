@@ -515,6 +515,31 @@ void main() {
     });
 
     test(
+      'an engine connecting sends the state again, before it connects',
+      () async {
+        // A core that lost its state (a service that crashed and came back)
+        // gets the whole state again at the connecting event.
+        final before = core.sent.length;
+        channel.coreSessionStarting();
+        await _settleQueue();
+        expect(core.sent, hasLength(before + 1));
+        expect(core.sent.last.on, isTrue);
+      },
+    );
+
+    test(
+      'an engine connecting while the hotspot is off sends nothing',
+      () async {
+        await channel.stop();
+        await _settleQueue();
+        final before = core.sent.length;
+        channel.coreSessionStarting();
+        await _settleQueue();
+        expect(core.sent, hasLength(before));
+      },
+    );
+
+    test(
       'a core that comes back while the hotspot is off hears nothing',
       () async {
         await channel.stop();

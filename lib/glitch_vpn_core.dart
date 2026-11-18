@@ -1691,6 +1691,7 @@ class GlitchVpnCore {
 
     switch (ev) {
       case GlitchVpnCoreFfiEventCode.engineConnecting:
+        VpnHotspotChannel.instance.coreSessionStarting();
         if (curr != VpnStatus.error) {
           VpnStatusChannel.instance.emit(VpnStatus.connecting);
         }
