@@ -209,8 +209,7 @@ class HotspotSharingWanted {
   final bool on;
   final bool blockWhileTunnelDown;
 
-  /// IPv4 addresses of the blocked devices, each the one it was last seen
-  /// with, listed or not.
+  /// MAC addresses of the blocked devices, listed or not.
   final List<String> blockedClients;
   const HotspotSharingWanted({
     required this.on,
@@ -389,8 +388,8 @@ class VpnHotspotChannel {
   final _blockedMacs = <String>{};
   final _seen = <String, HotspotClient>{};
 
-  // Every device seen, with the name and address it had last, so a blocked
-  // device that is not listed now stays blocked by the address it had.
+  // Every device seen, with the name it had last, so a blocked device that is
+  // not listed now keeps its name.
   final _lastKnown = <String, HotspotClient>{};
   Timer? _timer;
   bool _polling = false;
@@ -586,8 +585,8 @@ class VpnHotspotChannel {
     _pushSharing();
   }
 
-  /// Blocks the device with [mac]; it stays listed as blocked, and blocked by
-  /// the address it was last seen with while it is not listed.
+  /// Blocks the device with [mac]; it stays listed as blocked, and blocked
+  /// while it is not listed.
   void blockClient(String mac) {
     final normalized = HotspotClient.normalizeMac(mac);
     if (normalized == null || !_blockedMacs.add(normalized)) return;
@@ -792,7 +791,7 @@ class VpnHotspotChannel {
     final raw = answer?['clients'];
     if (raw is! List) return;
     // A device that left is dropped from the connected list; it stays known
-    // by the name and address it had.
+    // by the name it had.
     _seen.clear();
     for (final entry in raw) {
       final client = HotspotClient.tryParse(entry);
@@ -814,24 +813,12 @@ class VpnHotspotChannel {
     _clientsNotifier.value = List.unmodifiable(listed);
   }
 
-  /// The address a blocked device is blocked by: its own while it is listed,
-  /// else the one it was last seen with, unless a device that is listed now
-  /// holds that address (Windows leased it on).
-  String? _blockedAddress(String mac) {
-    final listed = _seen[mac];
-    if (listed != null) return listed.ipv4;
-    final remembered = _lastKnown[mac]?.ipv4;
-    if (remembered == null) return null;
-    final heldByAnother = _seen.values.any((c) => c.ipv4 == remembered);
-    return heldByAnother ? null : remembered;
-  }
-
   HotspotSharingWanted _wanted() => HotspotSharingWanted(
     on: _winrtOn,
     blockWhileTunnelDown: _blockWhileTunnelDown,
-    blockedClients: ([
-      for (final mac in _blockedMacs) ?_blockedAddress(mac),
-    ]..sort()).take(maxBlockedClients).toList(),
+    blockedClients: (_blockedMacs.toList()..sort())
+        .take(maxBlockedClients)
+        .toList(),
   );
 
   /// Sends the core the wanted state when it differs from the last one sent.

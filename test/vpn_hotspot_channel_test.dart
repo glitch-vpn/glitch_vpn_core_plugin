@@ -259,7 +259,7 @@ void main() {
         channel.blockClient('00:11:22:33:44:55');
         await channel.start();
         await _settleQueue();
-        expect(core.sent.single.blockedClients, ['192.168.137.33']);
+        expect(core.sent.single.blockedClients, ['00:11:22:33:44:55']);
       },
     );
 
@@ -736,78 +736,53 @@ void main() {
       expect(core.sent.first.blockedClients, isEmpty);
     });
 
-    test(
-      'blocking lists the device as blocked and sends its address',
-      () async {
-        channel.blockClient('00:11:22:33:44:55');
-        await _settleQueue();
-        expect(
-          channel.clients.value.firstWhere((c) => c.name == 'tv').blocked,
-          isTrue,
-        );
-        expect(core.sent.last.blockedClients, ['192.168.137.33']);
-        expect(
-          core.sent.last.toJson(),
-          '{"on":true,"blockWhileTunnelDown":true,'
-          '"blockedClients":["192.168.137.33"]}',
-        );
-      },
-    );
+    test('blocking lists the device as blocked and sends its MAC', () async {
+      channel.blockClient('00:11:22:33:44:55');
+      await _settleQueue();
+      expect(
+        channel.clients.value.firstWhere((c) => c.name == 'tv').blocked,
+        isTrue,
+      );
+      expect(core.sent.last.blockedClients, ['00:11:22:33:44:55']);
+      expect(
+        core.sent.last.toJson(),
+        '{"on":true,"blockWhileTunnelDown":true,'
+        '"blockedClients":["00:11:22:33:44:55"]}',
+      );
+    });
 
-    test(
-      'a blocked device that left stays listed and blocked by address',
-      () async {
-        channel.blockClient('00:11:22:33:44:55');
-        await _settleQueue();
-        native.answers['hotspotClients'] = _clientsAnswer([]);
-        await channel.refreshClients();
-        await _settleQueue();
-        final listed = channel.clients.value.single;
-        expect(listed.mac, '00:11:22:33:44:55');
-        expect(listed.name, 'tv');
-        expect(listed.ipv4, '192.168.137.33');
-        expect(listed.blocked, isTrue);
-        expect(core.sent.last.blockedClients, ['192.168.137.33']);
-      },
-    );
+    test('a blocked device that left stays listed and blocked', () async {
+      channel.blockClient('00:11:22:33:44:55');
+      await _settleQueue();
+      native.answers['hotspotClients'] = _clientsAnswer([]);
+      await channel.refreshClients();
+      await _settleQueue();
+      final listed = channel.clients.value.single;
+      expect(listed.mac, '00:11:22:33:44:55');
+      expect(listed.name, 'tv');
+      expect(listed.ipv4, '192.168.137.33');
+      expect(listed.blocked, isTrue);
+      expect(core.sent.last.blockedClients, ['00:11:22:33:44:55']);
+    });
 
-    test('a blocked device never listed has no address to block', () async {
+    test('a blocked device Windows does not list is still sent', () async {
       channel.blockClient('11:22:33:44:55:66');
       await _settleQueue();
       expect(channel.clients.value.last.mac, '11:22:33:44:55:66');
       expect(channel.clients.value.last.blocked, isTrue);
-      expect(core.sent.last.blockedClients, isEmpty);
+      expect(core.sent.last.blockedClients, ['11:22:33:44:55:66']);
     });
 
-    test(
-      'a blocked device that came back under another address moves',
-      () async {
-        channel.blockClient('00:11:22:33:44:55');
-        native.answers['hotspotClients'] = _clientsAnswer([
-          {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.77'},
-        ]);
-        await channel.refreshClients();
-        await _settleQueue();
-        expect(core.sent.last.blockedClients, ['192.168.137.77']);
-      },
-    );
-
-    test(
-      'an address leased on to another listed device is not blocked',
-      () async {
-        channel.blockClient('00:11:22:33:44:55');
-        await _settleQueue();
-        expect(core.sent.last.blockedClients, ['192.168.137.33']);
-        native.answers['hotspotClients'] = _clientsAnswer([
-          {'mac': '66-77-88-99-AA-BB', 'ipv4': '192.168.137.33', 'name': 'new'},
-        ]);
-        await channel.refreshClients();
-        await _settleQueue();
-        expect(core.sent.last.blockedClients, isEmpty);
-        final names = channel.clients.value.map((c) => c.name).toList();
-        expect(names, ['new', 'tv']);
-      },
-    );
+    test('a blocked device that came back under another address is '
+        'still sent by its MAC', () async {
+      channel.blockClient('00:11:22:33:44:55');
+      native.answers['hotspotClients'] = _clientsAnswer([
+        {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.77'},
+      ]);
+      await channel.refreshClients();
+      await _settleQueue();
+      expect(core.sent.last.blockedClients, ['00:11:22:33:44:55']);
+    });
 
     test('a client read that failed keeps the list and the state', () async {
       final before = channel.clients.value;
