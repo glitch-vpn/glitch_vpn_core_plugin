@@ -691,9 +691,8 @@ class VpnHotspotChannel {
     final stopFailure = _failureOf(answer);
     if (stopFailure != null) {
       // A stop that turned the hotspot off but could not restore the user's
-      // settings is off; one that did not turn it off, or whose result is not
-      // known, leaves it on.
-      // A stop whose outcome is not known leaves what the plugin believed.
+      // settings is off, one that did not turn it off leaves it on, and one
+      // whose outcome is not known leaves what the plugin believed.
       _setWinrtOn(
         answer?['running'] is bool ? answer!['running'] as bool : _winrtOn,
       );
