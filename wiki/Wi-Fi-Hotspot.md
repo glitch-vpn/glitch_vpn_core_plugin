@@ -74,7 +74,7 @@ switch.
 ## Devices
 
 `clients` lists the connected devices (name, MAC, IPv4) and, after them, blocked
-devices that are not connected, with the name they had when last
+devices that are not connected, with the name and IPv4 they had when last
 seen. It is read every three seconds while the hotspot is on, and by
 `refreshClients()`. Windows lists the devices ICS has leased an address to, so
 a device with a static address is never listed; a device is blocked by its

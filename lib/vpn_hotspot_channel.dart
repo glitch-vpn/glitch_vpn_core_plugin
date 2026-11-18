@@ -388,8 +388,8 @@ class VpnHotspotChannel {
   final _blockedMacs = <String>{};
   final _seen = <String, HotspotClient>{};
 
-  // Every device seen, with the name it had last, so a blocked device that is
-  // not listed now keeps its name.
+  // Every device seen, as it was last listed, so a blocked device that is not
+  // listed now keeps the name and IPv4 it had.
   final _lastKnown = <String, HotspotClient>{};
   Timer? _timer;
   bool _polling = false;
