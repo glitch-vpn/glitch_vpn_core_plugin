@@ -116,8 +116,13 @@ using flutter::EncodableValue;
 
 namespace {
 
-// Concurrent calls would race on the one tethering state Windows keeps.
-std::mutex g_mutex;
+// Concurrent calls would race on the one tethering state Windows keeps. It is
+// never destroyed: a call still running when the process exits dies holding
+// it, and destroying a held mutex aborts the process.
+std::mutex& TetheringMutex() {
+  static auto* mutex = new std::mutex();
+  return *mutex;
+}
 
 struct MtaScope {
   HRESULT hr;
@@ -462,7 +467,7 @@ EncodableValue Start(const std::string& ssid, const std::string& passphrase,
   const auto band = ParseBand(band_name);
   if (!band) return Failure("bandUnsupported", "unknown band " + band_name);
 
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(TetheringMutex());
   MtaScope com;
   try {
     const auto profile = PickPhysicalProfile();
@@ -544,7 +549,7 @@ EncodableValue Start(const std::string& ssid, const std::string& passphrase,
 }
 
 EncodableValue Stop() {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(TetheringMutex());
   MtaScope com;
   try {
     auto manager = AnyManager();
@@ -574,7 +579,7 @@ EncodableValue Stop() {
 }
 
 EncodableValue Status() {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(TetheringMutex());
   MtaScope com;
   EncodableMap out;
   out[EncodableValue("state")] = EncodableValue("unknown");
@@ -604,7 +609,7 @@ EncodableValue Status() {
 }
 
 EncodableValue Clients() {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(TetheringMutex());
   MtaScope com;
   EncodableList list;
   try {

@@ -18,6 +18,7 @@ set(PLUGIN_NAME "glitch_vpn_core_plugin")
 
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
+  "async_handoff.h"
   "glitch_vpn_core_plugin.cpp"
   "glitch_vpn_core_plugin.h"
   "hotspot.cpp"
@@ -140,6 +141,7 @@ FetchContent_MakeAvailable(googletest)
 # The plugin's C API is not very useful for unit testing, so build the sources
 # directly into the test binary rather than using the DLL.
 add_executable(${TEST_RUNNER}
+  test/async_handoff_test.cpp
   test/glitch_vpn_core_plugin_test.cpp
   test/hotspot_test.cpp
   ${PLUGIN_SOURCES}

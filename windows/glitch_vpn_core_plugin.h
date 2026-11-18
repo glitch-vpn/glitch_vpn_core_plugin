@@ -8,7 +8,8 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
+
+#include "async_handoff.h"
 
 // Forward-declare HWND to keep <windows.h> out of this header.
 struct HWND__;
@@ -48,8 +49,7 @@ class GlitchVpnCorePlugin : public flutter::Plugin {
   uint64_t next_id_ = 0;
   std::map<uint64_t, Result> pending_;  // platform-thread only
 
-  std::mutex done_mutex_;  // guards done_ (worker → platform hand-off)
-  std::map<uint64_t, flutter::EncodableValue> done_;
+  std::shared_ptr<AsyncHandoff> handoff_ = std::make_shared<AsyncHandoff>();
 };
 
 }  // namespace glitch_vpn_core

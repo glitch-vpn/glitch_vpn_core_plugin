@@ -151,6 +151,7 @@ GlitchVpnCorePlugin::GlitchVpnCorePlugin(
 }
 
 GlitchVpnCorePlugin::~GlitchVpnCorePlugin() {
+  handoff_->Close();
   if (proc_delegate_id_ != -1 && registrar_ != nullptr) {
     registrar_->UnregisterTopLevelWindowProcDelegate(proc_delegate_id_);
   }
@@ -169,23 +170,15 @@ void GlitchVpnCorePlugin::RunAsync(
   const uint64_t id = next_id_++;
   pending_[id] = std::move(result);  // platform thread owns the MethodResult
   HWND hwnd = message_window_;
-  std::thread([this, id, hwnd, work = std::move(work)]() {
-    flutter::EncodableValue value = work();
-    {
-      std::lock_guard<std::mutex> lock(done_mutex_);
-      done_.emplace(id, std::move(value));
+  std::thread([handoff = handoff_, id, hwnd, work = std::move(work)]() {
+    if (handoff->Deliver(id, work())) {
+      PostMessageW(hwnd, kAsyncDoneMessage, 0, 0);
     }
-    PostMessageW(hwnd, kAsyncDoneMessage, 0, 0);
   }).detach();
 }
 
 void GlitchVpnCorePlugin::DrainCompleted() {
-  std::map<uint64_t, flutter::EncodableValue> ready;
-  {
-    std::lock_guard<std::mutex> lock(done_mutex_);
-    ready.swap(done_);
-  }
-  for (auto& entry : ready) {
+  for (auto& entry : handoff_->TakeDone()) {
     auto it = pending_.find(entry.first);
     if (it != pending_.end()) {
       it->second->Success(entry.second);
