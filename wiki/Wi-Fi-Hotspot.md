@@ -69,11 +69,31 @@ devices that are not connected. It is read every three seconds while the
 hotspot is on, and by `refreshClients()`. Windows lists the devices ICS has
 leased an address to, so a device with a static address may be missing.
 
-## Blocking
+## The core's sharing
 
-`setBlockWhileTunnelDown`, `blockClient` and `unblockClient` set the wanted
-sharing state, `{on, blockWhileTunnelDown, blockedClients}`, and pass it to
-`sharingSink` whenever it changes. The core applies it; the plugin does not
-filter traffic itself. `blockWhileTunnelDown` is on by default.
+What the clients' traffic does is the core's, and the plugin tells it. `start()`
+first calls the core's `PrepareHotspot`, which repairs a stale Windows sharing
+state (it answers a failure the hotspot reports as `sharingNeedsElevation`,
+`sharingRepairFailed`, `coreUnreachable` or `unsupported`; a hotspot that
+already runs is kept). Then WinRT starts the hotspot. Only once WinRT reports it
+on does the plugin send `SetHotspotSharing` with the whole state,
+`{on, blockWhileTunnelDown, blockedClients}`, and it sends it again on every
+change, after the core is attached again (`GlitchVpnCore.initialize`, a status
+port reclaim), and with `on: false` as soon as the hotspot is off for any cause,
+including one turned off from Windows' settings (the plugin polls the state
+every three seconds while it is on). Nothing is sent before the first start.
+Both calls go through the core's own exports, so in service mode they reach the
+service over its pipe.
+
+The core answers with event 600, kept in `sharing`: the connection ICS shares
+(`tunnel`, `wifi`, `none`), whether the clients are blocked, an error, and a
+connection to restart the hotspot on. An error with `none` while the hotspot is
+on stops it and ends in `failed` (`sharingFailed`): a hotspot the core cannot
+block is not left running. A restart request restarts the hotspot on that
+connection, at most once every 30 seconds.
+
+`setBlockWhileTunnelDown` (on by default), `blockClient` and `unblockClient`
+change the wanted state. At most eight blocked clients are sent, by IPv4. The
 Windows Mobile hotspot cannot disconnect a device, so a blocked device stays
-joined and its traffic is dropped.
+joined and its traffic is dropped. The core is Windows-only here; other
+platforms answer `unsupported`.

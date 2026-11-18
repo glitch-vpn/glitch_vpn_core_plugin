@@ -21,7 +21,8 @@ enum GlitchVpnCoreFfiEventCode {
   ipEvent(303),
   logEvent(400),
   logError(401),
-  connEvent(402);
+  connEvent(402),
+  hotspotSharingEvent(600);
 
   const GlitchVpnCoreFfiEventCode(this.code);
   final int code;
@@ -58,6 +59,8 @@ enum GlitchVpnCoreFfiEventCode {
         return GlitchVpnCoreFfiEventCode.logError;
       case 402:
         return GlitchVpnCoreFfiEventCode.connEvent;
+      case 600:
+        return GlitchVpnCoreFfiEventCode.hotspotSharingEvent;
       default:
         return GlitchVpnCoreFfiEventCode.logError;
     }
@@ -292,6 +295,31 @@ class GlitchVpnCoreFfi {
     } finally {
       pkg.malloc.free(reqPtr);
       if (resPtr != ffi.nullptr) free(resPtr.cast());
+    }
+  }
+
+  // The repair can restart a service and wait for it for minutes - keep off
+  // the UI isolate. In service mode the core carries the call over the
+  // service's pipe itself, as it does for every export.
+  static Future<int> prepareHotspot() => Isolate.run(_prepareHotspotSync);
+
+  @pragma('vm:entry-point')
+  static int _prepareHotspotSync() =>
+      GlitchCoreBindings(_openLib()).PrepareHotspot();
+
+  // Stores the state and returns; in service mode a pipe round trip.
+  static Future<int> setHotspotSharing(String requestJson) =>
+      Isolate.run(() => _setHotspotSharingSync(requestJson));
+
+  @pragma('vm:entry-point')
+  static int _setHotspotSharingSync(String requestJson) {
+    final requestPtr = requestJson.toNativeUtf8();
+    try {
+      return GlitchCoreBindings(
+        _openLib(),
+      ).SetHotspotSharing(requestPtr.cast());
+    } finally {
+      pkg.malloc.free(requestPtr);
     }
   }
 

@@ -1,10 +1,20 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glitch_vpn_core/vpn_hotspot_channel.dart';
+
+/// Every call, native or core, in the order it happened.
+final _order = <String>[];
 
 class _FakeNative implements HotspotNative {
   final calls = <String>[];
   final answers = <String, Map<Object?, Object?>?>{};
   Map<String, Object?>? lastStartArguments;
+  Map<String, Object?>? lastRestartArguments;
+
+  /// Holds a call's answer until completed, to look at the world meanwhile.
+  final holds = <String, Completer<void>>{};
 
   @override
   Future<Map<Object?, Object?>?> invoke(
@@ -12,8 +22,41 @@ class _FakeNative implements HotspotNative {
     Map<String, Object?>? arguments,
   ]) async {
     calls.add(method);
+    _order.add('native:$method');
     if (method == 'hotspotStart') lastStartArguments = arguments;
+    if (method == 'hotspotRestartOn') lastRestartArguments = arguments;
+    await holds[method]?.future;
     return answers[method];
+  }
+}
+
+class _FakeCore implements HotspotCore {
+  int prepareCode = 0;
+  Object? prepareThrows;
+  final setCodes = <int>[]; // answers in turn; empty means 0
+  final sent = <HotspotSharingWanted>[];
+  int prepareCalls = 0;
+
+  @override
+  Future<int> prepare() async {
+    _order.add('core:prepare');
+    prepareCalls++;
+    if (prepareThrows != null) throw prepareThrows!;
+    return prepareCode;
+  }
+
+  @override
+  Future<int> setSharing(String json) async {
+    _order.add('core:set');
+    final m = jsonDecode(json) as Map;
+    sent.add(
+      HotspotSharingWanted(
+        on: m['on'] as bool,
+        blockWhileTunnelDown: m['blockWhileTunnelDown'] as bool,
+        blockedClients: (m['blockedClients'] as List).cast<String>(),
+      ),
+    );
+    return setCodes.isEmpty ? 0 : setCodes.removeAt(0);
   }
 }
 
@@ -22,6 +65,15 @@ Map<Object?, Object?> _clientsAnswer(List<Map<String, String>> clients) => {
 };
 
 const _ok = {'ok': true};
+
+const _tv = {
+  'mac': '00-11-22-33-44-55',
+  'ipv4': '192.168.137.33',
+  'name': 'tv',
+};
+
+/// Lets queued core calls (each runs in its own isolate for real) finish.
+Future<void> _settleQueue() => Future<void>.delayed(Duration.zero);
 
 void main() {
   group('HotspotClient', () {
@@ -117,15 +169,19 @@ void main() {
 
   group('state machine', () {
     late _FakeNative native;
+    late _FakeCore core;
     late VpnHotspotChannel channel;
     late List<HotspotState> states;
 
     setUp(() async {
+      _order.clear();
       native = _FakeNative()
         ..answers['hotspotStart'] = _ok
         ..answers['hotspotStop'] = _ok
+        ..answers['hotspotStatus'] = {'state': 'on', 'ours': true}
         ..answers['hotspotClients'] = _clientsAnswer([]);
-      channel = VpnHotspotChannel.withNative(native);
+      core = _FakeCore();
+      channel = VpnHotspotChannel.withNative(native, core: core);
       states = [];
       channel.stream.listen((u) => states.add(u.state));
       await channel.configure(
@@ -135,7 +191,7 @@ void main() {
       );
     });
 
-    test('start goes off, starting, on and sends the configuration', () async {
+    test('start goes starting, on and sends the configuration', () async {
       await channel.start();
       expect(states, [HotspotState.starting, HotspotState.on]);
       expect(native.lastStartArguments, {
@@ -143,6 +199,102 @@ void main() {
         'passphrase': 'made-up-pass',
         'band': '2.4',
       });
+    });
+
+    test(
+      'the core repairs first, then WinRT starts, then the core is told',
+      () async {
+        await channel.start();
+        await _settleQueue();
+        expect(_order.where((c) => !c.contains('hotspotClients')), [
+          'core:prepare',
+          'native:hotspotStart',
+          'core:set',
+        ]);
+        expect(core.sent.single.on, isTrue);
+      },
+    );
+
+    test('nothing reaches SetHotspotSharing before WinRT reports on', () async {
+      native.holds['hotspotStart'] = Completer<void>();
+      final started = channel.start();
+      await _settleQueue();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.starting);
+      expect(core.sent, isEmpty);
+      // Block calls while starting record the wish and send nothing.
+      channel.blockClient('00:11:22:33:44:55');
+      channel.setBlockWhileTunnelDown(false);
+      await _settleQueue();
+      expect(core.sent, isEmpty);
+      native.holds['hotspotStart']!.complete();
+      await started;
+      await _settleQueue();
+      expect(core.sent, hasLength(1));
+      expect(core.sent.single.blockWhileTunnelDown, isFalse);
+    });
+
+    test(
+      'a failed start sends nothing, and a stop then has nothing to undo',
+      () async {
+        native.answers['hotspotStart'] = {'reason': 'wifiOff'};
+        await channel.start();
+        await _settleQueue();
+        expect(core.sent, isEmpty);
+        await channel.stop();
+        await _settleQueue();
+        expect(core.sent, isEmpty);
+      },
+    );
+
+    test(
+      'a device already joined and blocked is in the first state sent',
+      () async {
+        native.answers['hotspotClients'] = _clientsAnswer([_tv]);
+        channel.blockClient('00:11:22:33:44:55');
+        await channel.start();
+        await _settleQueue();
+        expect(core.sent.single.blockedClients, ['192.168.137.33']);
+      },
+    );
+
+    test('PrepareHotspot codes map to failure reasons', () async {
+      const expected = {
+        1: HotspotFailureReason.coreUnreachable,
+        3: HotspotFailureReason.unsupported,
+        5: HotspotFailureReason.sharingNeedsElevation,
+        6: HotspotFailureReason.sharingRepairFailed,
+        9: HotspotFailureReason.unknown,
+      };
+      for (final entry in expected.entries) {
+        core.prepareCode = entry.key;
+        native.calls.clear();
+        await channel.start();
+        expect(
+          channel.value.state,
+          HotspotState.failed,
+          reason: '${entry.key}',
+        );
+        expect(channel.value.failure!.reason, entry.value);
+        expect(native.calls, isNot(contains('hotspotStart')));
+      }
+      expect(core.sent, isEmpty);
+    });
+
+    test('a core that throws is unreachable', () async {
+      core.prepareThrows = StateError('no library');
+      await channel.start();
+      expect(
+        channel.value.failure!.reason,
+        HotspotFailureReason.coreUnreachable,
+      );
+    });
+
+    test('code 4, a hotspot runs, goes on to the WinRT start', () async {
+      core.prepareCode = 4;
+      await channel.start();
+      expect(channel.value.state, HotspotState.on);
+      expect(native.calls, contains('hotspotStart'));
     });
 
     test('a native failure is failed with its reason', () async {
@@ -173,24 +325,35 @@ void main() {
       expect(channel.value.failure!.reason, HotspotFailureReason.unsupported);
     });
 
-    test('stop goes off and clears the clients', () async {
-      native.answers['hotspotClients'] = _clientsAnswer([
-        {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.33'},
-      ]);
-      await channel.start();
-      await channel.refreshClients();
-      expect(channel.clients.value, hasLength(1));
-      await channel.stop();
-      expect(channel.value.state, HotspotState.off);
-      expect(channel.clients.value, isEmpty);
-    });
+    test(
+      'stop goes off, clears the clients and tells the core on false',
+      () async {
+        native.answers['hotspotClients'] = _clientsAnswer([_tv]);
+        await channel.start();
+        expect(channel.clients.value, hasLength(1));
+        await channel.stop();
+        await _settleQueue();
+        expect(channel.value.state, HotspotState.off);
+        expect(channel.clients.value, isEmpty);
+        expect(core.sent.map((w) => w.on), [true, false]);
+      },
+    );
 
-    test('a failed stop is failed, not off', () async {
-      await channel.start();
-      native.answers['hotspotStop'] = {'reason': 'operationInProgress'};
-      await channel.stop();
-      expect(channel.value.state, HotspotState.failed);
-    });
+    test(
+      'a failed stop keeps the core blocking a hotspot that may still run',
+      () async {
+        await channel.start();
+        native.answers['hotspotStop'] = {'reason': 'operationInProgress'};
+        await channel.stop();
+        await _settleQueue();
+        expect(channel.value.state, HotspotState.failed);
+        expect(core.sent.map((w) => w.on), [true]);
+        native.answers['hotspotStop'] = _ok;
+        await channel.stop();
+        await _settleQueue();
+        expect(core.sent.map((w) => w.on), [true, false]);
+      },
+    );
 
     test('configure while on restarts with the new configuration', () async {
       await channel.start();
@@ -202,6 +365,9 @@ void main() {
       expect(native.calls.where((c) => c == 'hotspotStart'), hasLength(2));
       expect(native.lastStartArguments!['ssid'], 'other');
       expect(channel.value.state, HotspotState.on);
+      await _settleQueue();
+      // Off while the access point restarts, on again after.
+      expect(core.sent.map((w) => w.on), [true, false, true]);
     });
 
     test('calls queue behind a transition in flight', () async {
@@ -215,66 +381,87 @@ void main() {
       expect(channel.value.state, HotspotState.off);
     });
 
-    test('restartOn names the connection', () async {
-      native.answers['hotspotRestartOn'] = _ok;
-      await channel.start();
-      await channel.restartOn(HotspotConnection.tunnel);
-      expect(native.calls, contains('hotspotRestartOn'));
-      expect(channel.value.state, HotspotState.on);
-    });
-
     test(
       'reconcile adopts a hotspot of ours and ignores a foreign one',
       () async {
         native.answers['hotspotStatus'] = {'state': 'on', 'ours': false};
         await channel.reconcile();
         expect(channel.value.state, HotspotState.off);
+        await _settleQueue();
+        expect(core.sent, isEmpty);
         native.answers['hotspotStatus'] = {'state': 'on', 'ours': true};
         await channel.reconcile();
+        await _settleQueue();
         expect(channel.value.state, HotspotState.on);
+        expect(core.sent.single.on, isTrue);
+        expect(core.prepareCalls, 0);
       },
     );
+
+    test('a hotspot Windows turned off ends as off with on false', () async {
+      await channel.start();
+      native.answers['hotspotStatus'] = {'state': 'off', 'ours': true};
+      await channel.pollOnce();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.off);
+      expect(native.calls, contains('hotspotStop'));
+      expect(core.sent.map((w) => w.on), [true, false]);
+    });
+
+    test('a poll in transition leaves the state alone', () async {
+      await channel.start();
+      native.answers['hotspotStatus'] = {'state': 'transition'};
+      await channel.pollOnce();
+      expect(channel.value.state, HotspotState.on);
+    });
   });
 
-  group('clients and the wanted sharing state', () {
+  group('the core, after the hotspot is on', () {
     late _FakeNative native;
+    late _FakeCore core;
     late VpnHotspotChannel channel;
-    late List<HotspotSharingWanted> pushed;
 
     setUp(() async {
+      _order.clear();
       native = _FakeNative()
         ..answers['hotspotStart'] = _ok
+        ..answers['hotspotStop'] = _ok
+        ..answers['hotspotRestartOn'] = _ok
+        ..answers['hotspotStatus'] = {'state': 'on', 'ours': true}
         ..answers['hotspotClients'] = _clientsAnswer([
-          {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.33', 'name': 'tv'},
+          _tv,
           {'mac': 'AA-BB-CC-DD-EE-FF', 'ipv4': '192.168.137.40'},
         ]);
-      channel = VpnHotspotChannel.withNative(native);
-      pushed = [];
-      channel.sharingSink = pushed.add;
+      core = _FakeCore();
+      channel = VpnHotspotChannel.withNative(native, core: core);
       await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
       await channel.start();
-      await channel.refreshClients();
+      await _settleQueue();
     });
 
-    test('start pushes on with the block default', () {
-      expect(pushed.first.on, isTrue);
-      expect(pushed.first.blockWhileTunnelDown, isTrue);
-      expect(pushed.first.blockedClients, isEmpty);
+    test('start sends on with the block default', () {
+      expect(core.sent.first.on, isTrue);
+      expect(core.sent.first.blockWhileTunnelDown, isTrue);
+      expect(core.sent.first.blockedClients, isEmpty);
     });
 
-    test('blocking lists the device as blocked and pushes its address', () {
-      channel.blockClient('00:11:22:33:44:55');
-      expect(
-        channel.clients.value.firstWhere((c) => c.name == 'tv').blocked,
-        isTrue,
-      );
-      expect(pushed.last.blockedClients, ['192.168.137.33']);
-      expect(
-        pushed.last.toJson(),
-        '{"on":true,"blockWhileTunnelDown":true,'
-        '"blockedClients":["192.168.137.33"]}',
-      );
-    });
+    test(
+      'blocking lists the device as blocked and sends its address',
+      () async {
+        channel.blockClient('00:11:22:33:44:55');
+        await _settleQueue();
+        expect(
+          channel.clients.value.firstWhere((c) => c.name == 'tv').blocked,
+          isTrue,
+        );
+        expect(core.sent.last.blockedClients, ['192.168.137.33']);
+        expect(
+          core.sent.last.toJson(),
+          '{"on":true,"blockWhileTunnelDown":true,'
+          '"blockedClients":["192.168.137.33"]}',
+        );
+      },
+    );
 
     test(
       'a blocked device that left stays listed, without an address',
@@ -282,29 +469,183 @@ void main() {
         channel.blockClient('00:11:22:33:44:55');
         native.answers['hotspotClients'] = _clientsAnswer([]);
         await channel.refreshClients();
+        await _settleQueue();
         final listed = channel.clients.value.single;
         expect(listed.mac, '00:11:22:33:44:55');
         expect(listed.blocked, isTrue);
-        expect(pushed.last.blockedClients, isEmpty);
+        expect(core.sent.last.blockedClients, isEmpty);
       },
     );
 
-    test('unblocking and the block switch push once per change', () {
+    test('unblocking and the block switch send once per change', () async {
       channel.blockClient('00:11:22:33:44:55');
-      final before = pushed.length;
+      await _settleQueue();
+      final before = core.sent.length;
       channel.blockClient('00:11:22:33:44:55');
-      expect(pushed, hasLength(before));
+      await _settleQueue();
+      expect(core.sent, hasLength(before));
       channel.unblockClient('00:11:22:33:44:55');
-      expect(pushed.last.blockedClients, isEmpty);
+      await _settleQueue();
+      expect(core.sent.last.blockedClients, isEmpty);
       channel.setBlockWhileTunnelDown(false);
-      expect(pushed.last.blockWhileTunnelDown, isFalse);
-      expect(channel.wantedSharing, pushed.last);
+      await _settleQueue();
+      expect(core.sent.last.blockWhileTunnelDown, isFalse);
+      expect(channel.wantedSharing, core.sent.last);
     });
 
-    test('stop pushes on false', () async {
-      native.answers['hotspotStop'] = _ok;
-      await channel.stop();
-      expect(pushed.last.on, isFalse);
+    test('at most eight blocked clients are sent', () async {
+      native.answers['hotspotClients'] = _clientsAnswer([
+        for (var i = 0; i < 10; i++)
+          {'mac': '00-00-00-00-00-0$i', 'ipv4': '192.168.137.${40 + i}'},
+      ]);
+      await channel.refreshClients();
+      for (var i = 0; i < 10; i++) {
+        channel.blockClient('00:00:00:00:00:0$i');
+      }
+      await _settleQueue();
+      expect(core.sent.last.blockedClients, hasLength(8));
+    });
+
+    test('the state is sent again after the core comes back', () async {
+      final before = core.sent.length;
+      channel.coreReattached();
+      await _settleQueue();
+      expect(core.sent, hasLength(before + 1));
+      expect(core.sent.last, core.sent[before - 1]);
+    });
+
+    test(
+      'a core that comes back while the hotspot is off hears nothing',
+      () async {
+        await channel.stop();
+        await _settleQueue();
+        final before = core.sent.length;
+        channel.coreReattached();
+        await _settleQueue();
+        expect(core.sent, hasLength(before));
+      },
+    );
+
+    test(
+      'a core that did not answer is asked again at the next poll',
+      () async {
+        core.setCodes.add(1);
+        channel.setBlockWhileTunnelDown(false);
+        await _settleQueue();
+        expect(core.sent, hasLength(2));
+        await channel.pollOnce();
+        await _settleQueue();
+        expect(core.sent, hasLength(3));
+        expect(core.sent[2], core.sent[1]);
+        await channel.pollOnce();
+        await _settleQueue();
+        expect(core.sent, hasLength(3));
+      },
+    );
+
+    test('a refused request stops the hotspot and reports it failed', () async {
+      core.setCodes.add(2);
+      channel.setBlockWhileTunnelDown(false);
+      await _settleQueue();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.failed);
+      expect(channel.value.failure!.reason, HotspotFailureReason.sharingFailed);
+      expect(native.calls, contains('hotspotStop'));
+      await _settleQueue();
+      expect(core.sent.last.on, isFalse);
+    });
+
+    test('event 600 is kept for the app', () {
+      channel.handleCoreEvent(
+        '{"shared":"tunnel","blocked":false,"error":"","restartOn":""}',
+      );
+      expect(channel.sharing.value!.shared, 'tunnel');
+      expect(channel.sharing.value!.blocked, isFalse);
+    });
+
+    test(
+      'event 600 none with an error stops the hotspot and fails it',
+      () async {
+        channel.handleCoreEvent(
+          '{"shared":"none","blocked":true,"error":"no hotspot adapter",'
+          '"restartOn":""}',
+        );
+        await _settleQueue();
+        await _settleQueue();
+        expect(channel.value.state, HotspotState.failed);
+        expect(
+          channel.value.failure!.reason,
+          HotspotFailureReason.sharingFailed,
+        );
+        expect(channel.value.failure!.detail, 'no hotspot adapter');
+        expect(native.calls, contains('hotspotStop'));
+        expect(channel.sharing.value, isNull);
+        await _settleQueue();
+        expect(core.sent.last.on, isFalse);
+      },
+    );
+
+    test('event 600 none without an error is quiet', () async {
+      channel.handleCoreEvent('{"shared":"none","blocked":true,"error":""}');
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.on);
+    });
+
+    test(
+      'event 600 restartOn restarts on that connection, once per cooldown',
+      () async {
+        channel.handleCoreEvent(
+          '{"shared":"none","blocked":true,"error":"","restartOn":"tunnel"}',
+        );
+        await _settleQueue();
+        await _settleQueue();
+        expect(native.lastRestartArguments, {'connection': 'tunnel'});
+        expect(channel.value.state, HotspotState.on);
+        native.calls.clear();
+        channel.handleCoreEvent(
+          '{"shared":"none","blocked":true,"error":"","restartOn":"wifi"}',
+        );
+        await _settleQueue();
+        expect(native.calls, isNot(contains('hotspotRestartOn')));
+      },
+    );
+
+    test(
+      'event 600 is dropped when malformed or while the hotspot is off',
+      () async {
+        channel.handleCoreEvent('not json');
+        channel.handleCoreEvent('[]');
+        expect(channel.sharing.value, isNull);
+        await channel.stop();
+        channel.handleCoreEvent('{"shared":"tunnel","blocked":false}');
+        expect(channel.sharing.value, isNull);
+      },
+    );
+  });
+
+  group('HotspotSharingEvent.tryParse', () {
+    test('is lenient with missing and unknown fields', () {
+      final e = HotspotSharingEvent.tryParse('{"extra":1}')!;
+      expect(e.shared, 'none');
+      expect(e.blocked, isFalse);
+      expect(e.error, isEmpty);
+      expect(e.restartOn, isNull);
+    });
+
+    test('reads restartOn', () {
+      expect(
+        HotspotSharingEvent.tryParse('{"restartOn":"wifi"}')!.restartOn,
+        HotspotConnection.wifi,
+      );
+      expect(
+        HotspotSharingEvent.tryParse('{"restartOn":"x"}')!.restartOn,
+        isNull,
+      );
+    });
+
+    test('garbage is null', () {
+      expect(HotspotSharingEvent.tryParse('{'), isNull);
+      expect(HotspotSharingEvent.tryParse('3'), isNull);
     });
   });
 }

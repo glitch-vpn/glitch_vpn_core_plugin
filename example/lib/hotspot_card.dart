@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:glitch_vpn_core/vpn_hotspot_channel.dart';
 
 /// Exercises [VpnHotspotChannel]: capability, configure, start, stop, the
-/// device list and the block calls. The block calls only record the wanted
-/// state until the core's bridge is wired; the card shows what was recorded.
+/// device list and the block calls, which reach the core's sharing.
+/// state; the card shows what was sent to the core and what the core reported.
 class HotspotCard extends StatefulWidget {
   const HotspotCard({super.key});
 
@@ -173,9 +173,16 @@ class _HotspotCardState extends State<HotspotCard> {
                     ],
                   ),
                 ),
-                Text(
-                  'wanted: ${_channel.wantedSharing?.toJson() ?? '-'}',
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ValueListenableBuilder<HotspotSharingEvent?>(
+                  valueListenable: _channel.sharing,
+                  builder: (context, event, _) => Text(
+                    'sent to the core: '
+                    '${_channel.wantedSharing?.toJson() ?? '-'}\n'
+                    'core reports: ${event == null ? '-' : 'shared ${event.shared}, '
+                              'blocked ${event.blocked}, error "${event.error}", '
+                              'restartOn ${event.restartOn?.name ?? '-'}'}',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
                 ),
               ],
             );

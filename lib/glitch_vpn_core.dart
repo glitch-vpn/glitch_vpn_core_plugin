@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:glitch_vpn_core/glitch_vpn_core_ffi.dart';
+import 'package:glitch_vpn_core/vpn_hotspot_channel.dart';
 import 'package:glitch_vpn_core/vpn_status_channel.dart';
 import 'package:glitch_vpn_core/vpn_stats_channel.dart';
 import 'package:glitch_vpn_core/vpn_logs_channel.dart';
@@ -887,6 +888,7 @@ class GlitchVpnCore {
 
     // Re-register after UI restore / process death.
     GlitchVpnCoreFfi.instance.registerStatus(_onCoreEvent);
+    VpnHotspotChannel.instance.coreReattached();
 
     instance._startLogRetention();
 
@@ -1654,6 +1656,7 @@ class GlitchVpnCore {
       // session the system started and must hear it end.
       case 'reclaimStatus':
         GlitchVpnCoreFfi.instance.reclaimStatus();
+        VpnHotspotChannel.instance.coreReattached();
         break;
       // A system start while this UI isolate holds the core's events.
       case 'runSystemStart':
@@ -1772,6 +1775,10 @@ class GlitchVpnCore {
         final sel = VpnServerSelection.tryParse(msg as String);
         if (sel != null) VpnServerChannel.instance.emit(sel);
         break;
+      case GlitchVpnCoreFfiEventCode.hotspotSharingEvent:
+        VpnHotspotChannel.instance.handleCoreEvent(msg?.toString() ?? '');
+        break;
+
       case GlitchVpnCoreFfiEventCode.ipEvent:
         final ip = VpnExternalIp.tryParse(msg as String);
         if (ip != null) VpnIpChannel.instance.emit(ip);
