@@ -11,7 +11,6 @@ class _FakeNative implements HotspotNative {
   final calls = <String>[];
   final answers = <String, Map<Object?, Object?>?>{};
   Map<String, Object?>? lastStartArguments;
-  Map<String, Object?>? lastRestartArguments;
 
   /// Holds a call's answer until completed, to look at the world meanwhile.
   final holds = <String, Completer<void>>{};
@@ -24,7 +23,6 @@ class _FakeNative implements HotspotNative {
     calls.add(method);
     _order.add('native:$method');
     if (method == 'hotspotStart') lastStartArguments = arguments;
-    if (method == 'hotspotRestartOn') lastRestartArguments = arguments;
     await holds[method]?.future;
     return answers[method];
   }
@@ -111,28 +109,27 @@ void main() {
       expect(c.bands, [HotspotBand.auto, HotspotBand.ghz2_4]);
     });
 
-    test('carries the reason when unsupported', () {
-      final c = HotspotCapability.parse({
-        'supported': false,
-        'reason': 'disabled by group policy',
-      });
+    test('carries the reason when unsupported, as a code', () {
+      for (final entry in {
+        'noAdapter': HotspotUnsupportedReason.noAdapter,
+        'cannotHost': HotspotUnsupportedReason.cannotHost,
+        'noConnection': HotspotUnsupportedReason.noConnection,
+        'something else': HotspotUnsupportedReason.unknown,
+      }.entries) {
+        final c = HotspotCapability.parse({
+          'supported': false,
+          'reason': entry.key,
+        });
+        expect(c.supported, isFalse);
+        expect(c.unsupportedReason, entry.value);
+        expect(c.bands, isEmpty);
+      }
+    });
+
+    test('a missing answer is unavailable on this platform', () {
+      final c = HotspotCapability.parse(null);
       expect(c.supported, isFalse);
-      expect(c.unsupportedReason, 'disabled by group policy');
-      expect(c.bands, isEmpty);
-    });
-
-    test('a missing answer is unavailable', () {
-      expect(HotspotCapability.parse(null).supported, isFalse);
-    });
-  });
-
-  group('validation', () {
-    test('SSID is counted in UTF-8 bytes', () {
-      expect(VpnHotspotChannel.isValidSsid('a' * 32), isTrue);
-      expect(VpnHotspotChannel.isValidSsid('a' * 33), isFalse);
-      expect(VpnHotspotChannel.isValidSsid('ц' * 16), isTrue);
-      expect(VpnHotspotChannel.isValidSsid('ц' * 17), isFalse);
-      expect(VpnHotspotChannel.isValidSsid(''), isFalse);
+      expect(c.unsupportedReason, HotspotUnsupportedReason.platform);
     });
 
     test('passphrase is 8 to 63 printable ASCII', () {
@@ -339,24 +336,52 @@ void main() {
       },
     );
 
-    test(
-      'a failed stop keeps the core blocking a hotspot that may still run',
-      () async {
-        await channel.start();
-        native.answers['hotspotStop'] = {'reason': 'operationInProgress'};
-        await channel.stop();
-        await _settleQueue();
-        expect(channel.value.state, HotspotState.failed);
-        expect(core.sent.map((w) => w.on), [true]);
-        native.answers['hotspotStop'] = _ok;
-        await channel.stop();
-        await _settleQueue();
-        expect(core.sent.map((w) => w.on), [true, false]);
-      },
-    );
-
-    test('configure while on restarts with the new configuration', () async {
+    test('a stop Windows refused leaves the hotspot on for the core', () async {
       await channel.start();
+      native.answers['hotspotStop'] = {
+        'reason': 'operationInProgress',
+        'running': true,
+      };
+      await channel.stop();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.failed);
+      expect(core.sent.map((w) => w.on), [true]);
+      native.answers['hotspotStop'] = _ok;
+      await channel.stop();
+      await _settleQueue();
+      expect(core.sent.map((w) => w.on), [true, false]);
+    });
+
+    test('a stop with no answer about the hotspot leaves it on', () async {
+      await channel.start();
+      native.answers['hotspotStop'] = {'reason': 'noConnection'};
+      await channel.stop();
+      await _settleQueue();
+      expect(channel.value.failure!.reason, HotspotFailureReason.noConnection);
+      expect(core.sent.map((w) => w.on), [true]);
+    });
+
+    test('a stop that turned it off but could not restore is off', () async {
+      native.answers['hotspotClients'] = _clientsAnswer([_tv]);
+      await channel.start();
+      native.answers['hotspotStop'] = {
+        'reason': 'configureFailed',
+        'running': false,
+      };
+      await channel.stop();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.failed);
+      expect(
+        channel.value.failure!.reason,
+        HotspotFailureReason.configureFailed,
+      );
+      expect(channel.clients.value, isEmpty);
+      expect(core.sent.map((w) => w.on), [true, false]);
+    });
+
+    test('a change while on restarts, off then on for the core', () async {
+      await channel.start();
+      native.answers['hotspotStart'] = {'running': true, 'restarted': true};
       await channel.configure(
         ssid: 'other',
         passphrase: 'made-up-pass',
@@ -366,8 +391,82 @@ void main() {
       expect(native.lastStartArguments!['ssid'], 'other');
       expect(channel.value.state, HotspotState.on);
       await _settleQueue();
-      // Off while the access point restarts, on again after.
       expect(core.sent.map((w) => w.on), [true, false, true]);
+    });
+
+    test('a Save that changes nothing changes nothing', () async {
+      await channel.start();
+      native.calls.clear();
+      core.prepareCalls = 0;
+      await channel.configure(
+        ssid: 'test-net',
+        passphrase: 'made-up-pass',
+        band: HotspotBand.ghz2_4,
+      );
+      await _settleQueue();
+      expect(native.calls, isEmpty);
+      expect(core.prepareCalls, 0);
+      expect(core.sent.map((w) => w.on), [true]);
+      expect(channel.value.state, HotspotState.on);
+    });
+
+    test(
+      'a start that keeps a running hotspot never tells the core off',
+      () async {
+        native.answers['hotspotStart'] = {'running': true, 'restarted': false};
+        await channel.start();
+        await channel.start();
+        await _settleQueue();
+        expect(core.sent.map((w) => w.on), [true]);
+      },
+    );
+
+    test('a reconfigure Windows refuses before stopping stays on', () async {
+      await channel.start();
+      native.answers['hotspotStart'] = {
+        'reason': 'operationInProgress',
+        'running': true,
+      };
+      await channel.configure(
+        ssid: 'other',
+        passphrase: 'made-up-pass',
+        band: HotspotBand.auto,
+      );
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.failed);
+      expect(core.sent.map((w) => w.on), [true]);
+    });
+
+    test('a reconfigure the core refuses to prepare stays on', () async {
+      await channel.start();
+      core.prepareCode = 1;
+      await channel.configure(
+        ssid: 'other',
+        passphrase: 'made-up-pass',
+        band: HotspotBand.auto,
+      );
+      await _settleQueue();
+      expect(
+        channel.value.failure!.reason,
+        HotspotFailureReason.coreUnreachable,
+      );
+      expect(core.sent.map((w) => w.on), [true]);
+    });
+
+    test('a reconfigure that stopped it and then failed is off', () async {
+      await channel.start();
+      native.answers['hotspotStart'] = {
+        'reason': 'configureFailed',
+        'running': false,
+      };
+      await channel.configure(
+        ssid: 'other',
+        passphrase: 'made-up-pass',
+        band: HotspotBand.auto,
+      );
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.failed);
+      expect(core.sent.map((w) => w.on), [true, false]);
     });
 
     test('calls queue behind a transition in flight', () async {
@@ -416,6 +515,120 @@ void main() {
     });
   });
 
+  group('what WinRT says is what the core hears', () {
+    late _FakeNative native;
+    late _FakeCore core;
+    late VpnHotspotChannel channel;
+
+    setUp(() async {
+      _order.clear();
+      native = _FakeNative()
+        ..answers['hotspotStart'] = _ok
+        ..answers['hotspotStop'] = _ok
+        ..answers['hotspotStatus'] = {'state': 'on', 'ours': true}
+        ..answers['hotspotClients'] = _clientsAnswer([]);
+      core = _FakeCore();
+      channel = VpnHotspotChannel.withNative(native, core: core);
+    });
+
+    test('reconcile then configure on the launch never sends off', () async {
+      await channel.reconcile();
+      await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+      native.answers['hotspotStart'] = {'running': true, 'restarted': false};
+      await channel.start();
+      await _settleQueue();
+      expect(core.sent.map((w) => w.on), [true]);
+    });
+
+    test('a status that could not be read keeps the state', () async {
+      await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+      await channel.start();
+      native.answers['hotspotStatus'] = {'state': 'unknown', 'ours': true};
+      await channel.pollOnce();
+      native.answers['hotspotStatus'] = null;
+      await channel.pollOnce();
+      expect(channel.value.state, HotspotState.on);
+      expect(native.calls, isNot(contains('hotspotStop')));
+    });
+
+    test(
+      'reconcile with settings left saved and no hotspot puts them back',
+      () async {
+        native.answers['hotspotStatus'] = {'state': 'off', 'ours': true};
+        await channel.reconcile();
+        expect(native.calls, contains('hotspotStop'));
+        expect(channel.value.state, HotspotState.off);
+        await _settleQueue();
+        expect(core.sent, isEmpty);
+      },
+    );
+
+    test('reconcile with nothing of ours does nothing', () async {
+      native.answers['hotspotStatus'] = {'state': 'off', 'ours': false};
+      await channel.reconcile();
+      expect(native.calls, ['hotspotStatus']);
+    });
+
+    test(
+      'a core that never takes on true loses the hotspot after three polls',
+      () async {
+        core.setCodes.addAll([1, 1, 1, 1, 1, 1, 1, 1]);
+        await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+        await channel.start();
+        await _settleQueue();
+        for (var i = 0; i < VpnHotspotChannel.untakenPollLimit - 1; i++) {
+          await channel.pollOnce();
+          await _settleQueue();
+          expect(channel.value.state, HotspotState.on, reason: 'poll $i');
+        }
+        await channel.pollOnce();
+        await _settleQueue();
+        expect(channel.value.state, HotspotState.failed);
+        expect(
+          channel.value.failure!.reason,
+          HotspotFailureReason.coreUnreachable,
+        );
+        expect(native.calls, contains('hotspotStop'));
+      },
+    );
+
+    test('a core that takes on true late keeps the hotspot', () async {
+      core.setCodes.addAll([1, 1]);
+      await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+      await channel.start();
+      await _settleQueue();
+      await channel.pollOnce();
+      await _settleQueue();
+      await channel.pollOnce();
+      await _settleQueue();
+      await channel.pollOnce();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.on);
+    });
+
+    test(
+      'a failure with the same reason and another detail is published',
+      () async {
+        await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+        final details = <String>[];
+        channel.stream.listen((u) {
+          if (u.failure != null) details.add(u.failure!.detail);
+        });
+        native.answers['hotspotStart'] = {
+          'reason': 'startFailed',
+          'detail': 'a',
+        };
+        await channel.start();
+        native.answers['hotspotStart'] = {
+          'reason': 'startFailed',
+          'detail': 'b',
+        };
+        await channel.start();
+        expect(details, ['a', 'b']);
+      },
+    );
+  });
+
   group('the core, after the hotspot is on', () {
     late _FakeNative native;
     late _FakeCore core;
@@ -426,7 +639,6 @@ void main() {
       native = _FakeNative()
         ..answers['hotspotStart'] = _ok
         ..answers['hotspotStop'] = _ok
-        ..answers['hotspotRestartOn'] = _ok
         ..answers['hotspotStatus'] = {'state': 'on', 'ours': true}
         ..answers['hotspotClients'] = _clientsAnswer([
           _tv,
@@ -464,16 +676,40 @@ void main() {
     );
 
     test(
-      'a blocked device that left stays listed, without an address',
+      'a blocked device that left stays listed and blocked by address',
       () async {
         channel.blockClient('00:11:22:33:44:55');
+        await _settleQueue();
         native.answers['hotspotClients'] = _clientsAnswer([]);
         await channel.refreshClients();
         await _settleQueue();
         final listed = channel.clients.value.single;
         expect(listed.mac, '00:11:22:33:44:55');
+        expect(listed.name, 'tv');
+        expect(listed.ipv4, '192.168.137.33');
         expect(listed.blocked, isTrue);
-        expect(core.sent.last.blockedClients, isEmpty);
+        expect(core.sent.last.blockedClients, ['192.168.137.33']);
+      },
+    );
+
+    test('a blocked device never listed has no address to block', () async {
+      channel.blockClient('11:22:33:44:55:66');
+      await _settleQueue();
+      expect(channel.clients.value.last.mac, '11:22:33:44:55:66');
+      expect(channel.clients.value.last.blocked, isTrue);
+      expect(core.sent.last.blockedClients, isEmpty);
+    });
+
+    test(
+      'a blocked device that came back under another address moves',
+      () async {
+        channel.blockClient('00:11:22:33:44:55');
+        native.answers['hotspotClients'] = _clientsAnswer([
+          {'mac': '00-11-22-33-44-55', 'ipv4': '192.168.137.77'},
+        ]);
+        await channel.refreshClients();
+        await _settleQueue();
+        expect(core.sent.last.blockedClients, ['192.168.137.77']);
       },
     );
 
@@ -568,6 +804,32 @@ void main() {
       },
     );
 
+    test(
+      'an on false the core did not take is asked again with the hotspot off',
+      () async {
+        core.setCodes.add(1);
+        await channel.stop();
+        await _settleQueue();
+        expect(core.sent.map((w) => w.on), [true, false]);
+        expect(channel.value.state, HotspotState.off);
+        await channel.pollOnce();
+        await _settleQueue();
+        expect(core.sent.map((w) => w.on), [true, false, false]);
+        await channel.pollOnce();
+        await _settleQueue();
+        expect(core.sent, hasLength(3));
+      },
+    );
+
+    test('a core that took the state is not asked again', () async {
+      for (var i = 0; i < 5; i++) {
+        await channel.pollOnce();
+        await _settleQueue();
+      }
+      expect(core.sent, hasLength(1));
+      expect(channel.value.state, HotspotState.on);
+    });
+
     test('a refused request stops the hotspot and reports it failed', () async {
       core.setCodes.add(2);
       channel.setBlockWhileTunnelDown(false);
@@ -616,24 +878,15 @@ void main() {
       expect(channel.value.state, HotspotState.on);
     });
 
-    test(
-      'event 600 restartOn restarts on that connection, once per cooldown',
-      () async {
-        channel.handleCoreEvent(
-          '{"shared":"none","blocked":true,"error":"","restartOn":"tunnel"}',
-        );
-        await _settleQueue();
-        await _settleQueue();
-        expect(native.lastRestartArguments, {'connection': 'tunnel'});
-        expect(channel.value.state, HotspotState.on);
-        native.calls.clear();
-        channel.handleCoreEvent(
-          '{"shared":"none","blocked":true,"error":"","restartOn":"wifi"}',
-        );
-        await _settleQueue();
-        expect(native.calls, isNot(contains('hotspotRestartOn')));
-      },
-    );
+    test('event 600 asking for a restart is not acted on', () async {
+      channel.handleCoreEvent(
+        '{"shared":"none","blocked":true,"error":"","restartOn":"tunnel"}',
+      );
+      await _settleQueue();
+      await _settleQueue();
+      expect(channel.value.state, HotspotState.on);
+      expect(native.calls.where((c) => c == 'hotspotStart'), hasLength(1));
+    });
 
     test(
       'event 600 is dropped when malformed or while the hotspot is off',
@@ -650,22 +903,10 @@ void main() {
 
   group('HotspotSharingEvent.tryParse', () {
     test('is lenient with missing and unknown fields', () {
-      final e = HotspotSharingEvent.tryParse('{"extra":1}')!;
+      final e = HotspotSharingEvent.tryParse('{"extra":1,"restartOn":"x"}')!;
       expect(e.shared, 'none');
       expect(e.blocked, isFalse);
       expect(e.error, isEmpty);
-      expect(e.restartOn, isNull);
-    });
-
-    test('reads restartOn', () {
-      expect(
-        HotspotSharingEvent.tryParse('{"restartOn":"wifi"}')!.restartOn,
-        HotspotConnection.wifi,
-      );
-      expect(
-        HotspotSharingEvent.tryParse('{"restartOn":"x"}')!.restartOn,
-        isNull,
-      );
     });
 
     test('garbage is null', () {

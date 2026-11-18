@@ -858,6 +858,33 @@ class GlitchVpnCore {
   /// Windows MSI service present.
   static Future<bool> isServiceAvailable() => _isWindowsCoreServiceAvailable();
 
+  /// Re-register after UI restore / process death, and tell the hotspot the
+  /// core may be a new one.
+  static void _attachCoreEvents() {
+    (debugRegisterStatus ?? GlitchVpnCoreFfi.instance.registerStatus)(
+      _onCoreEvent,
+    );
+    VpnHotspotChannel.instance.coreReattached();
+  }
+
+  /// Stand-ins for the native registration and reclaim of the core's events,
+  /// so the wiring that follows them runs without the native library.
+  @visibleForTesting
+  static void Function(void Function(int, String))? debugRegisterStatus;
+
+  @visibleForTesting
+  static void Function()? debugReclaimStatus;
+
+  @visibleForTesting
+  static void debugAttachCoreEvents() => _attachCoreEvents();
+
+  @visibleForTesting
+  static Future<void> debugOnCoreEvent(int code, Object? msg) =>
+      _onCoreEvent(code, msg);
+
+  @visibleForTesting
+  static Future<void> debugOnNativeCall(MethodCall call) => _onNativeCall(call);
+
   /// Idempotent; call on every UI restore.
   static Future<void> initialize() async {
     if (!_ffiReady) {
@@ -886,9 +913,7 @@ class GlitchVpnCore {
       _handlerInstalled = true;
     }
 
-    // Re-register after UI restore / process death.
-    GlitchVpnCoreFfi.instance.registerStatus(_onCoreEvent);
-    VpnHotspotChannel.instance.coreReattached();
+    _attachCoreEvents();
 
     instance._startLogRetention();
 
@@ -1655,7 +1680,7 @@ class GlitchVpnCore {
       // The UI that held the core's events is gone; this isolate runs the
       // session the system started and must hear it end.
       case 'reclaimStatus':
-        GlitchVpnCoreFfi.instance.reclaimStatus();
+        (debugReclaimStatus ?? GlitchVpnCoreFfi.instance.reclaimStatus)();
         VpnHotspotChannel.instance.coreReattached();
         break;
       // A system start while this UI isolate holds the core's events.
@@ -1734,6 +1759,12 @@ class GlitchVpnCore {
         break;
 
       case GlitchVpnCoreFfiEventCode.engineStopRejectedNotRunning:
+        break;
+
+      // The core's client reconnected to a restarted service, which has lost
+      // the hotspot's state.
+      case GlitchVpnCoreFfiEventCode.serviceReattached:
+        VpnHotspotChannel.instance.coreReattached();
         break;
 
       case GlitchVpnCoreFfiEventCode.engineError:

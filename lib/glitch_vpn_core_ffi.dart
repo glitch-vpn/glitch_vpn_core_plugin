@@ -15,6 +15,7 @@ enum GlitchVpnCoreFfiEventCode {
   engineAlreadyRunning(505),
   engineConflictOtherCore(506),
   engineStopRejectedNotRunning(507),
+  serviceReattached(508),
   statsEvent(300),
   statsError(301),
   serverEvent(302),
@@ -45,6 +46,8 @@ enum GlitchVpnCoreFfiEventCode {
         return GlitchVpnCoreFfiEventCode.engineConflictOtherCore;
       case 507:
         return GlitchVpnCoreFfiEventCode.engineStopRejectedNotRunning;
+      case 508:
+        return GlitchVpnCoreFfiEventCode.serviceReattached;
       case 300:
         return GlitchVpnCoreFfiEventCode.statsEvent;
       case 301:

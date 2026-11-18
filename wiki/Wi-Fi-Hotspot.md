@@ -27,11 +27,20 @@ await hotspot.stop();
 
 `HotspotState` is `off`, `starting`, `on` or `failed`. A `failed` update carries
 a `HotspotFailure`: a `reason` (`unsupported`, `noConnection`, `wifiOff`,
-`operationInProgress`, `startFailed`, `configureFailed`, `bandUnsupported`,
-`invalidCredentials`, `unknown`) and the system's `detail` text. `start()` does
+`operationInProgress`, `startFailed`, `stopFailed`, `configureFailed`,
+`bandUnsupported`, `invalidCredentials`, `coreUnreachable`,
+`sharingNeedsElevation`, `sharingRepairFailed`, `sharingFailed`, `unknown`) and
+the system's `detail` text. `start()` does
 not throw on a failure; it throws `StateError` before `configure()`, and
 `configure()` throws `ArgumentError` on a name over 32 bytes of UTF-8 or a
-password outside 8 to 63 printable ASCII characters.
+password outside 8 to 63 printable ASCII characters. A `configure()` that
+changes nothing does nothing; a change while the hotspot is on restarts the
+access point.
+
+`HotspotCapability.unsupportedReason` is a code, not text: `noAdapter` (no Wi-Fi
+adapter with access point support), `cannotHost` (the adapter, a policy or the
+edition of Windows does not allow one), `noConnection` (no connection with
+internet access to share), `platform` or `unknown`.
 
 Calls are serialized: a `stop()` during a `start()` runs after it.
 
@@ -41,9 +50,7 @@ The hotspot shares the PC's physical connection, Wi-Fi or Ethernet with
 internet access (the one with the lowest metric), never the tunnel adapter.
 Windows turns a hotspot off within a second of the adapter it shares going
 away, and the tunnel's adapter is recreated on every disconnect and server
-switch. `restartOn(HotspotConnection.tunnel)` restarts the hotspot on the
-tunnel adapter's profile, and `restartOn(HotspotConnection.wifi)` back on the
-physical one; the access point is down for several seconds each time.
+switch.
 
 ## What Windows keeps
 
@@ -53,9 +60,11 @@ physical one; the access point is down for several seconds each time.
   the first overwrite and put back by `stop()`.
 * The no-connections timeout is off while the hotspot runs, so it does not
   switch itself off with no device on it.
-* The hotspot outlives the process that started it. `reconcile()` adopts one
-  that is running; `start()` keeps a running hotspot that has the wanted
-  configuration and restarts one that has another.
+* The hotspot outlives the process that started it. `reconcile()`, called when
+  the app starts and before `configure()`, adopts one that is running, and when
+  none runs but the user's settings are still saved from one that did, puts
+  them back, as `stop()` does. `start()` keeps a running hotspot that has the
+  wanted configuration and restarts one that has another.
 * At most eight devices can join. WPA3 and an open network are not available.
 * The password is stored by Windows readable to any local user; it is not a
   secret from the machine.
@@ -65,35 +74,46 @@ physical one; the access point is down for several seconds each time.
 ## Devices
 
 `clients` lists the connected devices (name, MAC, IPv4) and, after them, blocked
-devices that are not connected. It is read every three seconds while the
-hotspot is on, and by `refreshClients()`. Windows lists the devices ICS has
-leased an address to, so a device with a static address may be missing.
+devices that are not connected, with the name and address they had when last
+seen. It is read every three seconds while the hotspot is on, and by
+`refreshClients()`. Windows lists the devices ICS has leased an address to, so
+a device with a static address is never listed and cannot be blocked by
+address.
 
 ## The core's sharing
 
 What the clients' traffic does is the core's, and the plugin tells it. `start()`
 first calls the core's `PrepareHotspot`, which repairs a stale Windows sharing
-state (it answers a failure the hotspot reports as `sharingNeedsElevation`,
-`sharingRepairFailed`, `coreUnreachable` or `unsupported`; a hotspot that
-already runs is kept). Then WinRT starts the hotspot. Only once WinRT reports it
-on does the plugin send `SetHotspotSharing` with the whole state,
-`{on, blockWhileTunnelDown, blockedClients}`, and it sends it again on every
-change, after the core is attached again (`GlitchVpnCore.initialize`, a status
-port reclaim), and with `on: false` as soon as the hotspot is off for any cause,
-including one turned off from Windows' settings (the plugin polls the state
-every three seconds while it is on). Nothing is sent before the first start.
-Both calls go through the core's own exports, so in service mode they reach the
-service over its pipe.
+state (a refusal ends in `coreUnreachable`, `sharingNeedsElevation`,
+`sharingRepairFailed` or `unsupported`; a hotspot that already runs is kept).
+Then WinRT starts the hotspot. Only once WinRT reports it on does the plugin
+send `SetHotspotSharing` with the whole state,
+`{on, blockWhileTunnelDown, blockedClients}`. Nothing is sent before the first
+start. Both calls go through the core's own exports, so in service mode they
+reach the service over its pipe.
+
+`on` follows WinRT's operational state and nothing else. `on: false` goes out
+only once WinRT confirms the hotspot off: a stop that turned it off (even when
+restoring the user's settings then failed), one turned off from Windows'
+settings (the plugin polls the state every three seconds while it is on), or a
+reconfigure that stopped it, which is `false` and then `true` again once it
+runs. A reconfigure Windows refuses before stopping leaves the hotspot on and
+the state `on: true`. The state is sent again on every change and whenever the
+core may be a new one: `GlitchVpnCore.initialize`, a status port reclaim, every
+engine connecting event, and the service reattached event (508). A state the
+core did not take is sent again at every poll until it does, whatever the
+hotspot is doing. A core that has not taken `on: true` within three polls
+(about ten seconds) leaves the hotspot stopped and `failed` (`coreUnreachable`).
 
 The core answers with event 600, kept in `sharing`: the connection ICS shares
-(`tunnel`, `wifi`, `none`), whether the clients are blocked, an error, and a
-connection to restart the hotspot on. An error with `none` while the hotspot is
-on stops it and ends in `failed` (`sharingFailed`): a hotspot the core cannot
-block is not left running. A restart request restarts the hotspot on that
-connection, at most once every 30 seconds.
+(`tunnel`, `wifi`, `none`), whether the clients are blocked, and an error. An
+error with `none` while the hotspot is on stops it and ends in `failed`
+(`sharingFailed`): a hotspot the core cannot block is not left running.
+Nothing restarts the hotspot on the tunnel's profile: Windows turns a hotspot
+shared from it off with the tunnel.
 
 `setBlockWhileTunnelDown` (on by default), `blockClient` and `unblockClient`
-change the wanted state. At most eight blocked clients are sent, by IPv4. The
-Windows Mobile hotspot cannot disconnect a device, so a blocked device stays
-joined and its traffic is dropped. The core is Windows-only here; other
-platforms answer `unsupported`.
+change the wanted state. At most eight blocked clients are sent, by the IPv4
+each was last seen with, listed or not. The Windows Mobile hotspot cannot
+disconnect a device, so a blocked device stays joined and its traffic is
+dropped. The core is Windows-only here; other platforms answer `unsupported`.

@@ -6,8 +6,7 @@ import 'package:flutter/services.dart';
 
 import 'glitch_vpn_core_ffi.dart';
 
-/// Where a hotspot stands. [starting] covers a start, a reconfiguration and a
-/// restart on another connection.
+/// Where a hotspot stands. [starting] covers a start and a reconfiguration.
 enum HotspotState { off, starting, on, failed }
 
 /// Wi-Fi band of the access point. [auto] is always offered; the others only
@@ -28,10 +27,6 @@ enum HotspotBand {
   }
 }
 
-/// The connection the hotspot shares: the physical Wi-Fi or Ethernet
-/// connection, or the tunnel adapter's.
-enum HotspotConnection { wifi, tunnel }
-
 enum HotspotFailureReason {
   /// The system cannot host a hotspot; [HotspotFailure.detail] says why.
   unsupported,
@@ -44,6 +39,9 @@ enum HotspotFailureReason {
   configureFailed,
   bandUnsupported,
   invalidCredentials,
+
+  /// A stop that Windows refused or could not complete.
+  stopFailed,
 
   /// The core did not answer: a transport or timeout failure, or no core.
   coreUnreachable,
@@ -142,12 +140,34 @@ class HotspotClient {
   }
 }
 
+/// Why the system cannot host a hotspot now.
+enum HotspotUnsupportedReason {
+  /// No Wi-Fi adapter with access point support.
+  noAdapter,
+
+  /// The adapter, a policy or the edition of Windows does not allow one.
+  cannotHost,
+
+  /// No Wi-Fi or Ethernet connection with internet access to share.
+  noConnection,
+
+  /// This platform has no hotspot.
+  platform,
+  unknown;
+
+  static HotspotUnsupportedReason parse(String? code) {
+    for (final reason in values) {
+      if (reason.name == code) return reason;
+    }
+    return unknown;
+  }
+}
+
 class HotspotCapability {
   final bool supported;
 
-  /// Why the system cannot host a hotspot; null when it can. "noConnection"
-  /// when no connection with internet access exists to share.
-  final String? unsupportedReason;
+  /// Why the system cannot host a hotspot; null when it can.
+  final HotspotUnsupportedReason? unsupportedReason;
 
   /// The bands the adapter offers; empty when unsupported.
   final List<HotspotBand> bands;
@@ -159,7 +179,7 @@ class HotspotCapability {
 
   static const unavailable = HotspotCapability(
     supported: false,
-    unsupportedReason: 'platform',
+    unsupportedReason: HotspotUnsupportedReason.platform,
   );
 
   static HotspotCapability parse(Object? raw) {
@@ -167,7 +187,9 @@ class HotspotCapability {
     if (raw['supported'] != true) {
       return HotspotCapability(
         supported: false,
-        unsupportedReason: (raw['reason'] ?? '').toString(),
+        unsupportedReason: HotspotUnsupportedReason.parse(
+          raw['reason']?.toString(),
+        ),
       );
     }
     final bands = raw['bands'];
@@ -187,7 +209,8 @@ class HotspotSharingWanted {
   final bool on;
   final bool blockWhileTunnelDown;
 
-  /// IPv4 addresses of the blocked devices that are connected now.
+  /// IPv4 addresses of the blocked devices, each the one it was last seen
+  /// with, listed or not.
   final List<String> blockedClients;
   const HotspotSharingWanted({
     required this.on,
@@ -277,14 +300,10 @@ class HotspotSharingEvent {
 
   /// Non-empty when the core could not find or settle the hotspot.
   final String error;
-
-  /// The connection the core asks the hotspot to be restarted on, if any.
-  final HotspotConnection? restartOn;
   const HotspotSharingEvent({
     required this.shared,
     required this.blocked,
     required this.error,
-    this.restartOn,
   });
 
   /// Lenient: unknown or missing fields take their empty values; null only
@@ -293,16 +312,10 @@ class HotspotSharingEvent {
     try {
       final m = jsonDecode(json);
       if (m is! Map) return null;
-      final restart = (m['restartOn'] ?? '').toString();
       return HotspotSharingEvent(
         shared: (m['shared'] ?? 'none').toString(),
         blocked: m['blocked'] == true,
         error: (m['error'] ?? '').toString(),
-        restartOn: switch (restart) {
-          'tunnel' => HotspotConnection.tunnel,
-          'wifi' => HotspotConnection.wifi,
-          _ => null,
-        },
       );
     } catch (_) {
       return null;
@@ -317,10 +330,12 @@ class HotspotSharingEvent {
 ///
 /// The order: [start] asks the core to repair Windows' sharing state, starts
 /// the hotspot through WinRT, and only once WinRT reports it on sends the core
-/// `{on, blockWhileTunnelDown, blockedClients}`. The state is sent again on
-/// every change, after the core comes back ([coreReattached]), and with
-/// `on: false` as soon as the hotspot is off for any cause. Nothing is sent
-/// before the first start.
+/// `{on, blockWhileTunnelDown, blockedClients}`. `on` follows WinRT's
+/// operational state and nothing else: `on: false` goes out once WinRT
+/// confirms the hotspot off, whatever caused it. The state is sent again on
+/// every change and when the core comes back ([coreReattached],
+/// [coreSessionStarting]); a state the core did not take is sent again every
+/// poll until it does. Nothing is sent before the first start.
 ///
 /// The hotspot outlives the process that started it: [reconcile] adopts one
 /// that is running, and [start] keeps one that already has the wanted
@@ -328,15 +343,15 @@ class HotspotSharingEvent {
 /// first start and put back by [stop].
 class VpnHotspotChannel {
   VpnHotspotChannel._(this._native, this._core, this._pollInterval);
-  static final instance = VpnHotspotChannel._(
+  static VpnHotspotChannel _instance = VpnHotspotChannel._(
     const MethodChannelHotspotNative(),
     const FfiHotspotCore(),
     const Duration(seconds: 3),
   );
+  static VpnHotspotChannel get instance => _instance;
 
   /// A channel over another transport and core; a null [pollInterval] turns
-  /// polling off, and [pollOnce] is then the only way to read devices and the
-  /// hotspot's state.
+  /// the timer off, and [pollOnce] is then the only poll.
   @visibleForTesting
   factory VpnHotspotChannel.withNative(
     HotspotNative native, {
@@ -344,9 +359,13 @@ class VpnHotspotChannel {
     Duration? pollInterval,
   }) => VpnHotspotChannel._(native, core, pollInterval);
 
-  /// The core asks at most one restart on another connection per this long, so
-  /// a share it keeps refusing does not restart the hotspot in a loop.
-  static const restartCooldown = Duration(seconds: 30);
+  /// Makes [channel] the one the facade talks to, for tests of the facade.
+  @visibleForTesting
+  static set debugInstance(VpnHotspotChannel channel) => _instance = channel;
+
+  /// Polls without the core taking `on: true` before the hotspot is stopped
+  /// and reported failed: about ten seconds.
+  static const untakenPollLimit = 3;
 
   /// The core's sharing takes at most this many blocked clients.
   static const maxBlockedClients = 8;
@@ -369,20 +388,25 @@ class VpnHotspotChannel {
   bool _blockWhileTunnelDown = true;
   final _blockedMacs = <String>{};
   final _seen = <String, HotspotClient>{};
-  Timer? _poll;
+
+  // Every device seen, with the name and address it had last, so a blocked
+  // device that is not listed now stays blocked by the address it had.
+  final _lastKnown = <String, HotspotClient>{};
+  Timer? _timer;
   bool _polling = false;
   Future<void>? _transition;
 
-  // The core's side: the last state asked for, the queue that keeps asks in
-  // order, and whether the last ask must be repeated (the core did not answer).
-  HotspotSharingWanted? _lastRequested;
-  Future<void> _sharingQueue = Future.value();
-  bool _sharingRetry = false;
+  // WinRT's word on the hotspot: the one thing `on` follows.
+  bool _winrtOn = false;
 
-  // A stop that failed leaves a hotspot that may still run; the core keeps
-  // blocking its clients until a stop or an off is confirmed.
-  bool _mayStillRun = false;
-  DateTime? _lastRestartAt;
+  // The core's side: the last state asked for, whether the core took it, the
+  // asks in flight, and whether it took an `on: true` since the last reattach.
+  HotspotSharingWanted? _lastRequested;
+  bool _coreTookLast = true;
+  bool _coreTookOn = false;
+  int _untakenPolls = 0;
+  int _inFlight = 0;
+  Future<void> _sharingQueue = Future.value();
 
   Stream<HotspotUpdate> get stream => _ctrl.stream;
   ValueListenable<HotspotUpdate> get listenable => _notifier;
@@ -424,9 +448,9 @@ class VpnHotspotChannel {
   }
 
   /// Sets the network's name, password and band. Takes effect at the next
-  /// [start]; while the hotspot is on or starting it is applied at once, which
-  /// restarts the access point. Throws [ArgumentError] on an invalid name or
-  /// password.
+  /// [start]; while the hotspot is on or starting a change is applied at
+  /// once, which restarts the access point, and a call that changes nothing
+  /// does nothing. Throws [ArgumentError] on an invalid name or password.
   Future<void> configure({
     required String ssid,
     required String passphrase,
@@ -442,19 +466,21 @@ class VpnHotspotChannel {
         'must be 8 to 63 printable ASCII characters',
       );
     }
+    final changed = ssid != _ssid || passphrase != _passphrase || band != _band;
     _ssid = ssid;
     _passphrase = passphrase;
     _band = band;
-    if (value.state == HotspotState.on ||
-        value.state == HotspotState.starting) {
+    if (changed &&
+        (value.state == HotspotState.on ||
+            value.state == HotspotState.starting)) {
       await start();
     }
   }
 
   /// Starts the hotspot on the physical connection with the configured name,
   /// password and band. A running hotspot with the same configuration is
-  /// kept, one with another is restarted. The outcome is in [listenable]; a
-  /// failure does not throw. Throws [StateError] before [configure].
+  /// kept, one with another is restarted. The outcome is in [listenable];
+  /// a failure does not throw. Throws [StateError] before [configure].
   Future<void> start() {
     final ssid = _ssid;
     final passphrase = _passphrase;
@@ -486,53 +512,46 @@ class VpnHotspotChannel {
     return _transition = _run(() => _stopNow());
   }
 
-  /// Restarts the running hotspot on [connection]'s profile, keeping its
-  /// configuration; the access point is down for several seconds. The core
-  /// asks for it through event 600 when a share is refused.
-  Future<void> restartOn(HotspotConnection connection) {
-    final pending = _transition;
-    if (pending != null) return pending.then((_) => restartOn(connection));
-    return _transition = _run(() async {
-      _lastRestartAt = DateTime.now();
-      _emit(HotspotState.starting);
-      final answer = await _native.invoke('hotspotRestartOn', {
-        'connection': connection.name,
-      });
-      await _settle(answer);
-    });
-  }
-
   /// Adopts a hotspot a previous process started and left running; call it
-  /// once when the app starts. Does nothing when none of ours runs.
+  /// once when the app starts, before [configure]. When none runs but settings
+  /// of the user's are still saved from one that did (the process ended, or
+  /// Windows turned it off), puts them back, as [stop] does.
   Future<void> reconcile() async {
     final answer = await _native.invoke('hotspotStatus');
-    if (answer == null) return;
-    if (answer['state'] == 'on' && answer['ours'] == true) {
-      await _readClients();
-      _emit(HotspotState.on);
-      _startPolling();
+    if (answer == null || answer['ours'] != true) return;
+    switch (answer['state']) {
+      case 'on':
+        await _readClients();
+        _winrtOn = true;
+        _emit(HotspotState.on);
+        _ensureTimer();
+      case 'off':
+        if (value.state == HotspotState.off) await stop();
     }
   }
 
   /// Tells the channel the core was attached again (the app restored, the
-  /// status port was reclaimed, the service restarted). A new core has lost
+  /// status port was reclaimed, the service reconnected). A new core has lost
   /// the per-client filters, so the state is sent again if the hotspot is on.
   void coreReattached() {
     _lastRequested = null;
+    _coreTookOn = false;
+    _untakenPolls = 0;
     _pushSharing();
   }
 
   /// The core reports an engine connecting. A service that crashed and came
-  /// back has no hotspot state, and nothing else tells the plugin, so the
-  /// state is sent again if the hotspot is on, before the tunnel is up. The
-  /// core turns forwarding off at connecting and shares again at every
-  /// tunnel-up, so this adds no extra switch.
+  /// back has no hotspot state, so the state is sent again if the hotspot is
+  /// on, before the tunnel is up. The core turns forwarding off at connecting
+  /// and shares again at every tunnel-up, so this adds no extra switch.
   void coreSessionStarting() => coreReattached();
 
-  /// Event 600 from the core. A malformed payload is dropped.
+  /// Event 600 from the core. A malformed payload is dropped. An error with no
+  /// share stops the hotspot and reports it failed: a hotspot the core cannot
+  /// block is not left running.
   void handleCoreEvent(String json) {
     final event = HotspotSharingEvent.tryParse(json);
-    if (event == null || value.state != HotspotState.on) return;
+    if (event == null || !_winrtOn) return;
     _sharingNotifier.value = event;
     if (event.shared == 'none' && event.error.isNotEmpty) {
       unawaited(
@@ -540,11 +559,6 @@ class VpnHotspotChannel {
           HotspotFailure(HotspotFailureReason.sharingFailed, event.error),
         ),
       );
-      return;
-    }
-    final restart = event.restartOn;
-    if (restart != null && _restartAllowed()) {
-      unawaited(restartOn(restart));
     }
   }
 
@@ -556,7 +570,8 @@ class VpnHotspotChannel {
     _pushSharing();
   }
 
-  /// Blocks the device with [mac]; it stays listed as blocked.
+  /// Blocks the device with [mac]; it stays listed as blocked, and blocked by
+  /// the address it was last seen with while it is not listed.
   void blockClient(String mac) {
     final normalized = HotspotClient.normalizeMac(mac);
     if (normalized == null || !_blockedMacs.add(normalized)) return;
@@ -578,27 +593,41 @@ class VpnHotspotChannel {
     return _clientsNotifier.value;
   }
 
-  /// One poll: the hotspot's state, then its devices. A hotspot Windows turned
-  /// off (from its settings, a failure) ends here as off.
+  /// One poll, run by the timer every few seconds. It sends again a state the
+  /// core did not take, whatever the hotspot is doing; and while the hotspot
+  /// runs it reads WinRT's state (a hotspot Windows turned off ends here as
+  /// off), then the devices, and stops the hotspot when the core has not taken
+  /// `on: true` within [untakenPollLimit] polls.
   Future<void> pollOnce() async {
-    if (_polling || _transition != null || value.state != HotspotState.on) {
-      return;
-    }
+    if (_polling) return;
     _polling = true;
     try {
-      final status = await _native.invoke('hotspotStatus');
-      if (_transition != null || value.state != HotspotState.on) return;
-      if (status != null && status['state'] == 'off') {
-        await stop();
-        return;
-      }
-      await _readClients();
-      if (_sharingRetry) _lastRequested = null;
-      _pushSharing();
+      final last = _lastRequested;
+      if (last != null && !_coreTookLast && _inFlight == 0) _request(last);
+      if (_winrtOn && _transition == null) await _watchHotspot();
+      if (!_winrtOn && _coreTookLast) _cancelTimer();
     } on PlatformException {
       // The next poll reads again.
     } finally {
       _polling = false;
+    }
+  }
+
+  Future<void> _watchHotspot() async {
+    final status = await _native.invoke('hotspotStatus');
+    if (_transition != null || !_winrtOn) return;
+    if (status != null && status['state'] == 'off') {
+      await stop();
+      return;
+    }
+    await _readClients();
+    _pushSharing();
+    if (_coreTookOn) {
+      _untakenPolls = 0;
+    } else if (++_untakenPolls >= untakenPollLimit) {
+      await _failSharing(
+        const HotspotFailure(HotspotFailureReason.coreUnreachable),
+      );
     }
   }
 
@@ -645,15 +674,16 @@ class VpnHotspotChannel {
     final answer = await _native.invoke('hotspotStop');
     final stopFailure = _failureOf(answer);
     if (stopFailure != null) {
-      _mayStillRun = true;
+      // A stop that turned the hotspot off but could not restore the user's
+      // settings is off; one that did not turn it off, or whose result is not
+      // known, leaves it on.
+      _winrtOn = answer?['running'] is bool ? answer!['running'] as bool : true;
+      if (!_winrtOn) _clearDevices();
       _emit(HotspotState.failed, failure: failure ?? stopFailure);
       return;
     }
-    _mayStillRun = false;
-    _poll?.cancel();
-    _poll = null;
-    _seen.clear();
-    _publishClients();
+    _winrtOn = false;
+    _clearDevices();
     if (failure == null) {
       _emit(HotspotState.off);
     } else {
@@ -661,18 +691,18 @@ class VpnHotspotChannel {
     }
   }
 
+  void _clearDevices() {
+    _seen.clear();
+    _publishClients();
+  }
+
   /// The core cannot block the clients: a hotspot it cannot block is stopped
   /// and reported failed.
   Future<void> _failSharing(HotspotFailure failure) {
     final pending = _transition;
     if (pending != null) return pending.then((_) => _failSharing(failure));
-    if (value.state != HotspotState.on) return Future.value();
+    if (!_winrtOn) return Future.value();
     return _transition = _run(() => _stopNow(failure: failure));
-  }
-
-  bool _restartAllowed() {
-    final last = _lastRestartAt;
-    return last == null || DateTime.now().difference(last) >= restartCooldown;
   }
 
   Future<void> _settle(Map<Object?, Object?>? answer) async {
@@ -687,16 +717,25 @@ class VpnHotspotChannel {
       return;
     }
     final failure = _failureOf(answer);
+    final running = answer['running'];
     if (failure != null) {
+      if (running is bool) _winrtOn = running;
+      if (!_winrtOn) _clearDevices();
       _emit(HotspotState.failed, failure: failure);
       return;
+    }
+    // A running hotspot that was stopped to apply another configuration went
+    // off in WinRT's eyes, so the core hears it before it hears on again.
+    if (answer['restarted'] == true && _winrtOn) {
+      _winrtOn = false;
+      _pushSharing();
     }
     // The devices are read before the core hears the hotspot is on, so a
     // blocked device that is already joined is in the first state it gets.
     await _readClients();
-    _mayStillRun = false;
+    _winrtOn = true;
     _emit(HotspotState.on);
-    _startPolling();
+    _ensureTimer();
   }
 
   static HotspotFailure? _failureOf(Map<Object?, Object?>? answer) {
@@ -710,7 +749,9 @@ class VpnHotspotChannel {
 
   void _emit(HotspotState state, {HotspotFailure? failure}) {
     final last = _notifier.value;
-    if (last.state != state || last.failure?.reason != failure?.reason) {
+    if (last.state != state ||
+        last.failure?.reason != failure?.reason ||
+        last.failure?.detail != failure?.detail) {
       final next = HotspotUpdate(state, failure: failure, at: DateTime.now());
       _notifier.value = next;
       _ctrl.add(next);
@@ -719,45 +760,49 @@ class VpnHotspotChannel {
     _pushSharing();
   }
 
-  void _startPolling() {
+  void _ensureTimer() {
     final interval = _pollInterval;
-    if (interval == null || _poll != null) return;
-    _poll = Timer.periodic(interval, (_) => unawaited(pollOnce()));
+    if (interval == null || _timer != null) return;
+    _timer = Timer.periodic(interval, (_) => unawaited(pollOnce()));
+  }
+
+  void _cancelTimer() {
+    _timer?.cancel();
+    _timer = null;
   }
 
   Future<void> _readClients() async {
     final answer = await _native.invoke('hotspotClients');
     final raw = answer?['clients'];
     if (raw is! List) return;
-    // A device that left is dropped from the connected list; its entry lives
-    // on only while it is blocked.
+    // A device that left is dropped from the connected list; it stays known
+    // by the name and address it had.
     _seen.clear();
     for (final entry in raw) {
       final client = HotspotClient.tryParse(entry);
-      if (client != null) _seen[client.mac] = client;
+      if (client == null) continue;
+      _seen[client.mac] = client;
+      _lastKnown[client.mac] = client;
     }
     _publishClients();
   }
 
   void _publishClients() {
-    final connected = _seen.values.toList();
     final listed = <HotspotClient>[
-      for (final c in connected)
+      for (final c in _seen.values)
         c.copyWith(blocked: _blockedMacs.contains(c.mac)),
       for (final mac in _blockedMacs)
-        if (!_seen.containsKey(mac)) HotspotClient(mac: mac, blocked: true),
+        if (!_seen.containsKey(mac))
+          (_lastKnown[mac] ?? HotspotClient(mac: mac)).copyWith(blocked: true),
     ];
     _clientsNotifier.value = List.unmodifiable(listed);
   }
 
   HotspotSharingWanted _wanted() => HotspotSharingWanted(
-    on:
-        value.state == HotspotState.on ||
-        (value.state == HotspotState.failed && _mayStillRun),
+    on: _winrtOn,
     blockWhileTunnelDown: _blockWhileTunnelDown,
     blockedClients: ([
-      for (final c in _seen.values)
-        if (_blockedMacs.contains(c.mac) && c.ipv4 != null) c.ipv4!,
+      for (final mac in _blockedMacs) ?(_seen[mac] ?? _lastKnown[mac])?.ipv4,
     ]..sort()).take(maxBlockedClients).toList(),
   );
 
@@ -768,26 +813,40 @@ class VpnHotspotChannel {
     final wanted = _wanted();
     if (!wanted.on && !(_lastRequested?.on ?? false)) return;
     if (wanted == _lastRequested) return;
+    _request(wanted);
+  }
+
+  void _request(HotspotSharingWanted wanted) {
+    if (wanted.on && !(_lastRequested?.on ?? false)) {
+      _coreTookOn = false;
+      _untakenPolls = 0;
+    }
     _lastRequested = wanted;
-    _sharingRetry = false;
+    _coreTookLast = false;
+    _inFlight++;
+    _ensureTimer();
     _sharingQueue = _sharingQueue.then((_) => _send(wanted));
   }
 
   Future<void> _send(HotspotSharingWanted wanted) async {
-    final int code;
+    int? code;
     try {
       code = await _core.setSharing(wanted.toJson());
     } catch (_) {
-      _sharingRetry = true;
-      return;
+      // No answer is sent again by the next poll.
+    } finally {
+      _inFlight--;
     }
+    // A newer ask has replaced this one; only its answer counts.
+    final current = _lastRequested == wanted;
     switch (code) {
-      case 0:
+      case null || 1:
         return;
-      case 1:
-        // The core did not answer; the next poll sends the same state again.
-        _sharingRetry = true;
+      case 0:
+        if (current) _coreTookLast = true;
+        if (wanted.on && _winrtOn) _coreTookOn = true;
       case 3:
+        if (current) _coreTookLast = true;
         if (wanted.on) {
           unawaited(
             _failSharing(
@@ -796,6 +855,7 @@ class VpnHotspotChannel {
           );
         }
       default:
+        if (current) _coreTookLast = true;
         if (wanted.on) {
           unawaited(
             _failSharing(

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:glitch_vpn_core/vpn_hotspot_channel.dart';
 
 /// Exercises [VpnHotspotChannel]: capability, configure, start, stop, the
-/// device list and the block calls, which reach the core's sharing.
-/// state; the card shows what was sent to the core and what the core reported.
+/// device list and the block calls, which reach the core's sharing. The card
+/// shows what was sent to the core and what the core reported.
 class HotspotCard extends StatefulWidget {
   const HotspotCard({super.key});
 
@@ -84,7 +84,7 @@ class _HotspotCardState extends State<HotspotCard> {
                         : capability.supported
                         ? 'supported, bands: '
                               '${capability.bands.map((b) => b.wire).join(', ')}'
-                        : 'cannot host: ${capability.unsupportedReason}',
+                        : 'cannot host: ${capability.unsupportedReason?.name}',
                     style: const TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                 ),
@@ -120,18 +120,6 @@ class _HotspotCardState extends State<HotspotCard> {
                     OutlinedButton(
                       onPressed: busy ? null : _channel.stop,
                       child: const Text('Stop'),
-                    ),
-                    OutlinedButton(
-                      onPressed: busy
-                          ? null
-                          : () => _channel.restartOn(HotspotConnection.tunnel),
-                      child: const Text('Restart on tunnel'),
-                    ),
-                    OutlinedButton(
-                      onPressed: busy
-                          ? null
-                          : () => _channel.restartOn(HotspotConnection.wifi),
-                      child: const Text('Restart on Wi-Fi'),
                     ),
                     OutlinedButton(
                       onPressed: _channel.refreshClients,
@@ -179,8 +167,7 @@ class _HotspotCardState extends State<HotspotCard> {
                     'sent to the core: '
                     '${_channel.wantedSharing?.toJson() ?? '-'}\n'
                     'core reports: ${event == null ? '-' : 'shared ${event.shared}, '
-                              'blocked ${event.blocked}, error "${event.error}", '
-                              'restartOn ${event.restartOn?.name ?? '-'}'}',
+                              'blocked ${event.blocked}, error "${event.error}"'}',
                     style: const TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                 ),
