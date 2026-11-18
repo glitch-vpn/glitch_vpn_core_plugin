@@ -104,25 +104,23 @@ std::optional<SavedState> DecodeSavedState(const std::string& bytes) {
   return state;
 }
 
+std::mutex& TetheringMutex() {
+  static auto* mutex = new std::mutex();
+  return *mutex;
+}
+
 }  // namespace detail
 
 namespace winnet = winrt::Windows::Networking::Connectivity;
 namespace winop = winrt::Windows::Networking::NetworkOperators;
 using detail::AdapterInfo;
 using detail::SavedState;
+using detail::TetheringMutex;
 using flutter::EncodableList;
 using flutter::EncodableMap;
 using flutter::EncodableValue;
 
 namespace {
-
-// Concurrent calls would race on the one tethering state Windows keeps. It is
-// never destroyed: a call still running when the process exits dies holding
-// it, and destroying a held mutex aborts the process.
-std::mutex& TetheringMutex() {
-  static auto* mutex = new std::mutex();
-  return *mutex;
-}
 
 struct MtaScope {
   HRESULT hr;

@@ -3,7 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+#include <future>
 #include <string>
+#include <thread>
 
 #include "hotspot_internal.h"
 
@@ -115,6 +118,23 @@ TEST(HotspotSavedState, TruncatedOrOversizedInputIsRejected) {
   std::string lying = encoded;
   lying[0] = '\x7f';
   EXPECT_FALSE(DecodeSavedState(lying).has_value());
+}
+
+// A call still running at exit dies holding the mutex; the process must still
+// exit cleanly rather than abort while its statics are destroyed.
+TEST(HotspotTetheringMutex, AProcessExitsWhileACallHoldsIt) {
+  EXPECT_EXIT(
+      {
+        std::promise<void> locked;
+        std::thread([&locked] {
+          TetheringMutex().lock();
+          locked.set_value();
+          Sleep(INFINITE);
+        }).detach();
+        locked.get_future().wait();
+        std::exit(0);
+      },
+      testing::ExitedWithCode(0), "");
 }
 
 }  // namespace

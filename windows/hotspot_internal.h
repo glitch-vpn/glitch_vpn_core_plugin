@@ -4,6 +4,7 @@
 #include <guiddef.h>
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -46,6 +47,12 @@ std::string EncodeSavedState(const SavedState& state);
 
 // Null for text that is not a whole encoded state.
 std::optional<SavedState> DecodeSavedState(const std::string& bytes);
+
+// Held by every call that reads or changes the hotspot, since concurrent calls
+// would race on the one tethering state Windows keeps. It is never destroyed: a
+// call still running when the process exits dies holding it, and a debug build
+// aborts when a held mutex is destroyed.
+std::mutex& TetheringMutex();
 
 }  // namespace glitch_vpn_core::hotspot::detail
 

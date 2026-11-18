@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "async_handoff.h"
 
@@ -50,6 +52,32 @@ TEST(AsyncHandoff, AWorkerOutlivesItsOwner) {
     EXPECT_FALSE(handoff->Deliver(1, EncodableValue("late")));
   });
   worker.join();
+}
+
+TEST(AsyncHandoff, NothingLandsOnceClosingReturns) {
+  AsyncHandoff handoff;
+  std::atomic<bool> closed{false};
+  std::atomic<bool> landed_after_close{false};
+  std::vector<std::thread> workers;
+  for (uint64_t worker = 0; worker < 8; ++worker) {
+    workers.emplace_back([&, worker] {
+      for (uint64_t i = 0; i < 2000; ++i) {
+        const bool was_closed = closed.load();
+        if (handoff.Deliver(worker * 10000 + i, EncodableValue(1)) &&
+            was_closed) {
+          landed_after_close = true;
+        }
+      }
+    });
+  }
+  std::this_thread::yield();
+  handoff.Close();
+  closed = true;
+  for (auto& worker : workers) worker.join();
+
+  EXPECT_FALSE(landed_after_close);
+  EXPECT_TRUE(handoff.TakeDone().empty());
+  EXPECT_FALSE(handoff.Deliver(0, EncodableValue(1)));
 }
 
 }  // namespace
