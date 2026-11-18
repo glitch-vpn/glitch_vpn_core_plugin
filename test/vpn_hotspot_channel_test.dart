@@ -32,6 +32,9 @@ class _FakeCore implements HotspotCore {
   int prepareCode = 0;
   Object? prepareThrows;
   final setCodes = <int>[]; // answers in turn; empty means 0
+
+  /// Holds the first SetHotspotSharing answer until completed.
+  Completer<void>? holdFirstSet;
   final sent = <HotspotSharingWanted>[];
   int prepareCalls = 0;
 
@@ -54,6 +57,11 @@ class _FakeCore implements HotspotCore {
         blockedClients: (m['blockedClients'] as List).cast<String>(),
       ),
     );
+    final hold = holdFirstSet;
+    if (hold != null) {
+      holdFirstSet = null;
+      await hold.future;
+    }
     return setCodes.isEmpty ? 0 : setCodes.removeAt(0);
   }
 }
@@ -379,7 +387,8 @@ void main() {
       expect(core.sent.map((w) => w.on), [true, false]);
     });
 
-    test('a change while on restarts, off then on for the core', () async {
+    test('a restart inside one call never tells the core off', () async {
+      native.answers['hotspotClients'] = _clientsAnswer([_tv]);
       await channel.start();
       native.answers['hotspotStart'] = {'running': true, 'restarted': true};
       await channel.configure(
@@ -391,7 +400,8 @@ void main() {
       expect(native.lastStartArguments!['ssid'], 'other');
       expect(channel.value.state, HotspotState.on);
       await _settleQueue();
-      expect(core.sent.map((w) => w.on), [true, false, true]);
+      // The whole state, on, goes again; the core keeps blocking meanwhile.
+      expect(core.sent.map((w) => w.on), [true, true]);
     });
 
     test('a Save that changes nothing changes nothing', () async {
@@ -592,6 +602,75 @@ void main() {
       },
     );
 
+    test(
+      'a stop whose outcome is unknown on a channel never started sends nothing',
+      () async {
+        for (final reason in ['noConnection', 'stopFailed']) {
+          native.answers['hotspotStop'] = {'reason': reason};
+          await channel.stop();
+          await _settleQueue();
+          expect(channel.value.state, HotspotState.failed, reason: reason);
+        }
+        expect(core.sent, isEmpty);
+      },
+    );
+
+    test(
+      'reconcile with settings saved whose stop is unknown sends nothing',
+      () async {
+        native.answers['hotspotStatus'] = {'state': 'off', 'ours': true};
+        native.answers['hotspotStop'] = {'reason': 'stopFailed'};
+        await channel.reconcile();
+        await _settleQueue();
+        expect(core.sent, isEmpty);
+      },
+    );
+
+    test(
+      'a stop whose outcome is unknown leaves a running hotspot on',
+      () async {
+        await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+        await channel.start();
+        native.answers['hotspotStop'] = {'reason': 'stopFailed'};
+        await channel.stop();
+        await _settleQueue();
+        expect(core.sent.map((w) => w.on), [true]);
+      },
+    );
+
+    test(
+      'an ack that arrives after the hotspot went off is not the next one',
+      () async {
+        final held = Completer<void>();
+        core.holdFirstSet = held;
+        await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
+        await channel.start();
+        await _settleQueue();
+        native.answers['hotspotStatus'] = {'state': 'off', 'ours': true};
+        await channel.pollOnce();
+        expect(channel.value.state, HotspotState.off);
+        held.complete();
+        for (var i = 0; i < 4; i++) {
+          await _settleQueue();
+        }
+        expect(core.sent.map((w) => w.on), [true, false]);
+        // The hotspot comes up again and the core never takes on true.
+        core.setCodes.addAll([1, 1, 1, 1, 1, 1, 1, 1]);
+        native.answers['hotspotStatus'] = {'state': 'on', 'ours': true};
+        await channel.start();
+        await _settleQueue();
+        for (var i = 0; i < VpnHotspotChannel.untakenPollLimit; i++) {
+          await channel.pollOnce();
+          await _settleQueue();
+        }
+        expect(channel.value.state, HotspotState.failed);
+        expect(
+          channel.value.failure!.reason,
+          HotspotFailureReason.coreUnreachable,
+        );
+      },
+    );
+
     test('a core that takes on true late keeps the hotspot', () async {
       core.setCodes.addAll([1, 1]);
       await channel.configure(ssid: 'test-net', passphrase: 'made-up-pass');
@@ -712,6 +791,38 @@ void main() {
         expect(core.sent.last.blockedClients, ['192.168.137.77']);
       },
     );
+
+    test(
+      'an address leased on to another listed device is not blocked',
+      () async {
+        channel.blockClient('00:11:22:33:44:55');
+        await _settleQueue();
+        expect(core.sent.last.blockedClients, ['192.168.137.33']);
+        native.answers['hotspotClients'] = _clientsAnswer([
+          {'mac': '66-77-88-99-AA-BB', 'ipv4': '192.168.137.33', 'name': 'new'},
+        ]);
+        await channel.refreshClients();
+        await _settleQueue();
+        expect(core.sent.last.blockedClients, isEmpty);
+        final names = channel.clients.value.map((c) => c.name).toList();
+        expect(names, ['new', 'tv']);
+      },
+    );
+
+    test('a client read that failed keeps the list and the state', () async {
+      final before = channel.clients.value;
+      expect(before, isNotEmpty);
+      final sent = core.sent.length;
+      native.answers['hotspotClients'] = {
+        'reason': 'unknown',
+        'detail': 'read failed',
+      };
+      await channel.refreshClients();
+      await channel.pollOnce();
+      await _settleQueue();
+      expect(channel.clients.value, before);
+      expect(core.sent, hasLength(sent));
+    });
 
     test('unblocking and the block switch send once per change', () async {
       channel.blockClient('00:11:22:33:44:55');

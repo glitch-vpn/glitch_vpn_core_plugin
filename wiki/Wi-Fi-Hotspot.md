@@ -95,10 +95,11 @@ reach the service over its pipe.
 `on` follows WinRT's operational state and nothing else. `on: false` goes out
 only once WinRT confirms the hotspot off: a stop that turned it off (even when
 restoring the user's settings then failed), one turned off from Windows'
-settings (the plugin polls the state every three seconds while it is on), or a
-reconfigure that stopped it, which is `false` and then `true` again once it
-runs. A reconfigure Windows refuses before stopping leaves the hotspot on and
-the state `on: true`. The state is sent again on every change and whenever the
+settings (the plugin polls the state every three seconds while it is on). A
+reconfigure that restarts the access point is never told as `false`: the whole
+state goes again as `on: true`, so the core keeps blocking meanwhile, and one
+Windows refuses before stopping leaves the hotspot on and the state `on: true`.
+A stop whose outcome is unknown leaves what the plugin believed. The state is sent again on every change and whenever the
 core may be a new one: `GlitchVpnCore.initialize`, a status port reclaim, every
 engine connecting event, and the service reattached event (508). A state the
 core did not take is sent again at every poll until it does, whatever the

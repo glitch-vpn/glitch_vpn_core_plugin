@@ -90,7 +90,8 @@ wiki/                         # user-facing docs (GitHub wiki page names);
 ## 4. Core contract essentials
 
 - Event codes: 300 stats, 301 statsError, 302 server, 303 ip, 400/401 logs,
-  402 conn, 500–507 engine lifecycle. Payload shapes live in the core's
+  402 conn, 500–507 engine lifecycle, 508 service reattached (a restarted
+  service), 600 hotspot sharing. Payload shapes live in the core's
   `CLAUDE.md` §4 — that table is canonical.
 - On reattach (hot restart, app relaunch over a live tunnel, Windows service)
   the core **replays** connected + 302 + 303 + stats when the status port is

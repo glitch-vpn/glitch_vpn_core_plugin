@@ -144,9 +144,17 @@ EncodableValue Ok(bool running, bool restarted = false) {
   return EncodableValue(m);
 }
 
-bool IsRunning(winop::NetworkOperatorTetheringManager& manager) {
-  return manager.TetheringOperationalState() !=
-         winop::TetheringOperationalState::Off;
+// Whether the hotspot runs now; unknown (no value) while it is in transition
+// or Windows does not say, which the caller reports as no answer.
+std::optional<bool> IsRunning(winop::NetworkOperatorTetheringManager& manager) {
+  switch (manager.TetheringOperationalState()) {
+    case winop::TetheringOperationalState::On:
+      return true;
+    case winop::TetheringOperationalState::Off:
+      return false;
+    default:
+      return std::nullopt;
+  }
 }
 
 // === Adapters ===
@@ -249,7 +257,8 @@ std::string CapabilityCode(winop::TetheringCapability c) {
 }
 
 EncodableValue OperationFailure(winop::TetheringOperationStatus status,
-                                const winrt::hstring& extra, bool running) {
+                                const winrt::hstring& extra,
+                                std::optional<bool> running) {
   using winop::TetheringOperationStatus;
   std::string reason = "startFailed";
   std::string detail;

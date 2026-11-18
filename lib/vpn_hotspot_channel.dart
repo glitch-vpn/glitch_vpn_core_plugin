@@ -406,6 +406,7 @@ class VpnHotspotChannel {
   bool _coreTookOn = false;
   int _untakenPolls = 0;
   int _inFlight = 0;
+  int _requestSequence = 0;
   Future<void> _sharingQueue = Future.value();
 
   Stream<HotspotUpdate> get stream => _ctrl.stream;
@@ -522,7 +523,7 @@ class VpnHotspotChannel {
     switch (answer['state']) {
       case 'on':
         await _readClients();
-        _winrtOn = true;
+        _setWinrtOn(true);
         _emit(HotspotState.on);
         _ensureTimer();
       case 'off':
@@ -534,10 +535,25 @@ class VpnHotspotChannel {
   /// status port was reclaimed, the service reconnected). A new core has lost
   /// the per-client filters, so the state is sent again if the hotspot is on.
   void coreReattached() {
+    _forgetSent();
+    _pushSharing();
+  }
+
+  /// Forgets what was sent, so the whole state goes again and must be taken.
+  void _forgetSent() {
     _lastRequested = null;
     _coreTookOn = false;
     _untakenPolls = 0;
-    _pushSharing();
+  }
+
+  void _setWinrtOn(bool on) {
+    _winrtOn = on;
+    // An ack for an on: true that arrives after the hotspot went off is not
+    // the core taking the next one.
+    if (!on) {
+      _coreTookOn = false;
+      _untakenPolls = 0;
+    }
   }
 
   /// The core reports an engine connecting. A service that crashed and came
@@ -677,12 +693,15 @@ class VpnHotspotChannel {
       // A stop that turned the hotspot off but could not restore the user's
       // settings is off; one that did not turn it off, or whose result is not
       // known, leaves it on.
-      _winrtOn = answer?['running'] is bool ? answer!['running'] as bool : true;
+      // A stop whose outcome is not known leaves what the plugin believed.
+      _setWinrtOn(
+        answer?['running'] is bool ? answer!['running'] as bool : _winrtOn,
+      );
       if (!_winrtOn) _clearDevices();
       _emit(HotspotState.failed, failure: failure ?? stopFailure);
       return;
     }
-    _winrtOn = false;
+    _setWinrtOn(false);
     _clearDevices();
     if (failure == null) {
       _emit(HotspotState.off);
@@ -719,21 +738,19 @@ class VpnHotspotChannel {
     final failure = _failureOf(answer);
     final running = answer['running'];
     if (failure != null) {
-      if (running is bool) _winrtOn = running;
+      if (running is bool) _setWinrtOn(running);
       if (!_winrtOn) _clearDevices();
       _emit(HotspotState.failed, failure: failure);
       return;
     }
-    // A running hotspot that was stopped to apply another configuration went
-    // off in WinRT's eyes, so the core hears it before it hears on again.
-    if (answer['restarted'] == true && _winrtOn) {
-      _winrtOn = false;
-      _pushSharing();
-    }
+    // A running hotspot that was stopped to apply another configuration is
+    // never told off: the core is sent the whole state again, on, which it
+    // takes as it takes every state, and keeps blocking meanwhile.
+    if (answer['restarted'] == true && _winrtOn) _forgetSent();
     // The devices are read before the core hears the hotspot is on, so a
     // blocked device that is already joined is in the first state it gets.
     await _readClients();
-    _winrtOn = true;
+    _setWinrtOn(true);
     _emit(HotspotState.on);
     _ensureTimer();
   }
@@ -798,11 +815,23 @@ class VpnHotspotChannel {
     _clientsNotifier.value = List.unmodifiable(listed);
   }
 
+  /// The address a blocked device is blocked by: its own while it is listed,
+  /// else the one it was last seen with, unless a device that is listed now
+  /// holds that address (Windows leased it on).
+  String? _blockedAddress(String mac) {
+    final listed = _seen[mac];
+    if (listed != null) return listed.ipv4;
+    final remembered = _lastKnown[mac]?.ipv4;
+    if (remembered == null) return null;
+    final heldByAnother = _seen.values.any((c) => c.ipv4 == remembered);
+    return heldByAnother ? null : remembered;
+  }
+
   HotspotSharingWanted _wanted() => HotspotSharingWanted(
     on: _winrtOn,
     blockWhileTunnelDown: _blockWhileTunnelDown,
     blockedClients: ([
-      for (final mac in _blockedMacs) ?(_seen[mac] ?? _lastKnown[mac])?.ipv4,
+      for (final mac in _blockedMacs) ?_blockedAddress(mac),
     ]..sort()).take(maxBlockedClients).toList(),
   );
 
@@ -817,18 +846,15 @@ class VpnHotspotChannel {
   }
 
   void _request(HotspotSharingWanted wanted) {
-    if (wanted.on && !(_lastRequested?.on ?? false)) {
-      _coreTookOn = false;
-      _untakenPolls = 0;
-    }
     _lastRequested = wanted;
+    final sequence = ++_requestSequence;
     _coreTookLast = false;
     _inFlight++;
     _ensureTimer();
-    _sharingQueue = _sharingQueue.then((_) => _send(wanted));
+    _sharingQueue = _sharingQueue.then((_) => _send(wanted, sequence));
   }
 
-  Future<void> _send(HotspotSharingWanted wanted) async {
+  Future<void> _send(HotspotSharingWanted wanted, int sequence) async {
     int? code;
     try {
       code = await _core.setSharing(wanted.toJson());
@@ -838,7 +864,7 @@ class VpnHotspotChannel {
       _inFlight--;
     }
     // A newer ask has replaced this one; only its answer counts.
-    final current = _lastRequested == wanted;
+    final current = sequence == _requestSequence;
     switch (code) {
       case null || 1:
         return;
