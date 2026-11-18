@@ -542,6 +542,31 @@ class GlitchVpnCore {
   static Future<T> _withTransitionLock<T>(Future<T> Function() action) async =>
       _transitionMutex.runExclusive(action);
 
+  /// How long a connect waits for a stop in progress to report its end.
+  static const stopReportLimit = Duration(seconds: 15);
+
+  /// Waits while the status reads `disconnecting`, up to [limit]. The core
+  /// stops in the background and reports `disconnected` only once the adapter
+  /// is closed; a connect that went ahead before then would take that late
+  /// report as the end of its own session.
+  @visibleForTesting
+  static Future<void> awaitStopReported({Duration limit = stopReportLimit}) {
+    final status = VpnStatusChannel.instance.listenable;
+    if (status.value.status != VpnStatus.disconnecting) return Future.value();
+    final reported = Completer<void>();
+    void settle() {
+      if (status.value.status != VpnStatus.disconnecting &&
+          !reported.isCompleted) {
+        reported.complete();
+      }
+    }
+
+    status.addListener(settle);
+    return reported.future
+        .timeout(limit, onTimeout: () {})
+        .whenComplete(() => status.removeListener(settle));
+  }
+
   Stream<VpnStatusUpdate> get onStatusChanged =>
       VpnStatusChannel.instance.stream;
 
@@ -1193,6 +1218,7 @@ class GlitchVpnCore {
     String ipv6EchoUrl = '', // empty → core default (api6.ipify.org)
   }) async {
     await _withTransitionLock(() async {
+      await awaitStopReported();
       final currentStatus = VpnStatusChannel.instance.value.status;
 
       if (currentStatus == VpnStatus.disconnecting ||
