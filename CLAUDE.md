@@ -43,7 +43,7 @@ does.
    — models expose `tryParse(String) → T?` and the dispatcher drops nulls.
    A malformed event must not kill the isolate.
 4. **Session-scoped channels reset on session end.** Whatever is cached for
-   the UI (status, server selection, external IP) is cleared on
+   the UI (status, server selection, external IP, stats) is cleared on
    disconnect/error and at the start of a new connect, or a new session shows
    the previous session's data.
 5. **No secrets in logs.** Share links and configs carry credentials — never

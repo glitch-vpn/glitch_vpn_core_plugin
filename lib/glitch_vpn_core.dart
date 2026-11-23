@@ -573,6 +573,9 @@ class GlitchVpnCore {
   ValueListenable<VpnStatusUpdate> get statusListenable =>
       VpnStatusChannel.instance.listenable;
 
+  /// Unlike the server and IP streams, it emits a zeroed [VpnStats] at a
+  /// session's end and at a connect, so a listener never keeps the last tick
+  /// of a finished session.
   Stream<VpnStats> get onStatsChanged => VpnStatsChannel.instance.stream;
 
   Stream<VpnLog> get onLogsChanged => VpnLogsChannel.instance.stream;
@@ -1421,6 +1424,7 @@ class GlitchVpnCore {
   static void _resetSessionChannels() {
     VpnServerChannel.instance.reset();
     VpnIpChannel.instance.reset();
+    VpnStatsChannel.instance.reset();
   }
 
   /// Mirrors Go's `filepath.IsAbs` for the running platform.

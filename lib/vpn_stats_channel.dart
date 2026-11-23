@@ -85,4 +85,8 @@ class VpnStatsChannel {
     _notifier.value = next;
     _ctrl.add(next);
   }
+
+  /// A session's end must not leave its last tick for the next session to show
+  /// before its own first.
+  void reset() => emit(0, 0, 0);
 }
