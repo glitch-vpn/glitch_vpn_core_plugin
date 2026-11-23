@@ -2175,6 +2175,21 @@ class GlitchVpnCore {
     return {for (final pkg in res ?? const []) pkg.toString()};
   }
 
+  /// The labels of [packageNames] as `{package: label}`, reading only those
+  /// packages. A name that is not a well-formed package name, is not installed
+  /// or is this app itself is left out. Empty off Android.
+  Future<Map<String, String>> appsLabel(List<String> packageNames) async {
+    final names = packageNames.where(isAndroidPackageName).toList();
+    if (!Platform.isAndroid || names.isEmpty) return const <String, String>{};
+    final res = await _ch.invokeMethod<Map<dynamic, dynamic>>('appsLabel', {
+      'packages': names,
+    });
+    return {
+      for (final entry in (res ?? const {}).entries)
+        entry.key.toString(): entry.value.toString(),
+    };
+  }
+
   Future<Map<String, Uint8List>> appsIcon(
     List<String> packageNames,
     void Function(Map<String, Uint8List>)? callback,

@@ -468,6 +468,30 @@ void main() {
     skip: Platform.isAndroid ? 'the platform answers on Android' : null,
   );
 
+  test(
+    'appsLabel answers an empty map without asking the platform off Android',
+    () async {
+      const channel = MethodChannel('glitch_vpn_core');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return <String, String>{'com.example.app': 'Example'};
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      expect(await GlitchVpnCore.instance.appsLabel(const []), isEmpty);
+      expect(
+        await GlitchVpnCore.instance.appsLabel(const ['com.example.app']),
+        isEmpty,
+      );
+      expect(calls, isEmpty);
+    },
+    skip: Platform.isAndroid ? 'the platform answers on Android' : null,
+  );
+
   test('isAndroidPackageName accepts the package grammar and nothing else', () {
     expect(GlitchVpnCore.isAndroidPackageName('com.example.app_1'), isTrue);
     expect(GlitchVpnCore.isAndroidPackageName('app'), isFalse);

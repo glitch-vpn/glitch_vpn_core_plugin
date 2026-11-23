@@ -98,6 +98,58 @@ internal class InstalledAppsListingTest {
             index.lookups,
         )
     }
+
+    @Test
+    fun labelsNameOnlyThePackagesAskedFor() {
+        val labeled = mutableListOf<String>()
+        val index = FakeIndex(
+            listOf(
+                app("com.android.chrome", "Chrome", labeled, system = true),
+                app("com.android.chrome.beta", "Chrome Beta", labeled),
+                app("com.google.android.apps.maps", "Maps", labeled, enabled = false),
+            ),
+        )
+
+        val labels = installedAppLabels(
+            index,
+            own,
+            listOf("com.google.android.apps.maps", "com.android.chrome", "com.android.chrome"),
+        )
+
+        assertEquals(
+            mapOf("com.google.android.apps.maps" to "Maps", "com.android.chrome" to "Chrome"),
+            labels,
+        )
+        assertEquals(listOf("com.google.android.apps.maps", "com.android.chrome"), labeled)
+        assertEquals(
+            listOf("com.google.android.apps.maps", "com.android.chrome"),
+            index.lookups,
+        )
+    }
+
+    @Test
+    fun labelsLeaveOutWhatIsNotListed() {
+        val labeled = mutableListOf<String>()
+        val index = FakeIndex(listOf(app(own, "Glitch", labeled), app("com.android.chrome", "Chrome", labeled)))
+
+        val labels = installedAppLabels(
+            index,
+            own,
+            listOf(own, "com.missing.app", "chrome", 7, null, "com.android.chrome"),
+        )
+
+        assertEquals(mapOf("com.android.chrome" to "Chrome"), labels)
+        assertEquals(listOf("com.android.chrome"), labeled)
+        assertEquals(listOf(own, "com.missing.app", "com.android.chrome"), index.lookups)
+    }
+
+    @Test
+    fun noPackagesAskedForReadsNothing() {
+        val index = FakeIndex(emptyList())
+
+        assertEquals(emptyMap(), installedAppLabels(index, own, emptyList()))
+        assertEquals(emptyList(), index.lookups)
+    }
 }
 
 internal class FakeIndex(

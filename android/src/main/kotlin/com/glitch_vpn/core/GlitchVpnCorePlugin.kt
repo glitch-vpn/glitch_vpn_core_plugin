@@ -91,6 +91,11 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         return installedPackagesAmong(PackageManagerIndex(ctx.packageManager), packages)
     }
 
+    private fun loadAppLabels(packages: List<Any?>): Map<String, String> {
+        val ctx = appContext ?: return emptyMap()
+        return installedAppLabels(PackageManagerIndex(ctx.packageManager), ctx.packageName, packages)
+    }
+
     private fun loadAppIcons(packages: List<String>): Map<String, ByteArray> {
         val ctx = appContext ?: return emptyMap()
         val pm = ctx.packageManager
@@ -306,6 +311,18 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         emptyList()
                     }
                     mainHandler.post { result.success(installed) }
+                }
+            }
+
+            "appsLabel" -> {
+                val packages = call.argument<List<Any?>>("packages") ?: emptyList()
+                bgExecutor.execute {
+                    val labels = try {
+                        loadAppLabels(packages)
+                    } catch (_: Throwable) {
+                        emptyMap()
+                    }
+                    mainHandler.post { result.success(labels) }
                 }
             }
 

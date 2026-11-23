@@ -48,6 +48,25 @@ internal fun installedPackagesAmong(apps: InstalledAppIndex, packages: List<Any?
         isPackageName(name) && apps.application(name) != null
     }
 
+/**
+ * The labels of the [packages] asked for, as `package` to label: only the well-formed names that are
+ * installed and that [isListed] lists with every package in scope. No other app is labelled.
+ */
+internal fun installedAppLabels(
+    apps: InstalledAppIndex,
+    ownPackage: String,
+    packages: List<Any?>,
+): Map<String, String> {
+    val labels = LinkedHashMap<String, String>()
+    for (name in packages.filterIsInstance<String>().distinct()) {
+        if (!isPackageName(name)) continue
+        val app = apps.application(name) ?: continue
+        if (!isListed(app.packageName, app.system, app.enabled, emptySet(), false, ownPackage)) continue
+        labels[name] = app.label()
+    }
+    return labels
+}
+
 internal interface InstalledAppIndex {
     fun launchablePackages(): Set<String>
     fun installedApplications(): List<InstalledApp>
