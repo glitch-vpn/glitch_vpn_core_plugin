@@ -74,56 +74,21 @@ class GlitchVpnCorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private val bgExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private fun launcherPackages(pm: android.content.pm.PackageManager): Set<String> {
-        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
-            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-        @Suppress("DEPRECATION")
-        return pm.queryIntentActivities(intent, 0).map { it.activityInfo.packageName }.toSet()
-    }
-
     private fun loadInstalledApps(offset: Int, limit: Int?, launchableOnly: Boolean, query: String?): Map<String, Any> {
         val ctx = appContext ?: return emptyMap()
-        val pm = ctx.packageManager
-        val apps = pm.getInstalledApplications(0)
-        val lowerQuery = query?.trim()?.lowercase()
-        val launchable = if (launchableOnly) launcherPackages(pm) else emptySet()
-        val filteredBase = apps.filter {
-            isListed(
-                it.packageName ?: "",
-                (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
-                it.enabled,
-                launchable,
-                launchableOnly,
-                ctx.packageName,
-            )
-        }
-        val filtered = if (lowerQuery.isNullOrEmpty()) filteredBase else filteredBase.filter { ai ->
-            val pkg = ai.packageName ?: ""
-            val name = pm.getApplicationLabel(ai)?.toString() ?: pkg
-            pkg.lowercase().contains(lowerQuery) || name.lowercase().contains(lowerQuery)
-        }
-        val total = filtered.size
-        val start = offset.coerceIn(0, filtered.size)
-        val end = if (limit == null) filtered.size else (start + limit).coerceAtMost(filtered.size)
-        val slice = if (start < end) filtered.subList(start, end) else emptyList()
-        val out = ArrayList<Map<String, String>>(slice.size)
-        for (ai in slice) {
-            val pkg = ai.packageName ?: continue
-            val name = pm.getApplicationLabel(ai)?.toString() ?: pkg
-            out.add(mapOf("package" to pkg, "name" to name))
-        }
-        return hashMapOf("items" to out, "total" to total)
+        return installedAppsPage(
+            PackageManagerIndex(ctx.packageManager),
+            ctx.packageName,
+            offset,
+            limit,
+            launchableOnly,
+            query,
+        )
     }
 
-    private val packageNameGrammar = Regex("""[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+""")
-
     private fun filterInstalledPackages(packages: List<Any?>): List<String> {
-        val pm = appContext?.packageManager ?: return emptyList()
-        return packages.filterIsInstance<String>().distinct().filter { pkg ->
-            if (pkg.length > 255 || !packageNameGrammar.matches(pkg)) return@filter false
-            try { pm.getApplicationInfo(pkg, 0); true }
-            catch (_: Throwable) { false }
-        }
+        val ctx = appContext ?: return emptyList()
+        return installedPackagesAmong(PackageManagerIndex(ctx.packageManager), packages)
     }
 
     private fun loadAppIcons(packages: List<String>): Map<String, ByteArray> {

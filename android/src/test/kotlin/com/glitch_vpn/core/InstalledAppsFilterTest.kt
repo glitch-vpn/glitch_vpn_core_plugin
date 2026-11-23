@@ -41,4 +41,16 @@ internal class InstalledAppsFilterTest {
         assertEquals(emptyList(), listed(true, own to false))
         assertEquals(emptyList(), listed(false, own to false))
     }
+
+    @Test
+    fun aPackageNameHasAtLeastTwoSegmentsAndAtMost255Characters() {
+        assertEquals(true, isPackageName("com.android.chrome"))
+        assertEquals(false, isPackageName("chrome"))
+        assertEquals(false, isPackageName("com."))
+        assertEquals(false, isPackageName(""))
+        val within = "ab." + "c".repeat(252)
+        assertEquals(255, within.length)
+        assertEquals(true, isPackageName(within))
+        assertEquals(false, isPackageName(within + "c"))
+    }
 }
